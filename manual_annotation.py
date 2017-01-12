@@ -42,14 +42,7 @@ try:
         else:
             continue
         times.append(time.time() - s)
-        
-except KeyboardInterrupt as e:
+finally:        
     save_times()
     session.commit()
     session.close()
-    raise e
-
-save_times()
-
-session.commit()
-session.close()
