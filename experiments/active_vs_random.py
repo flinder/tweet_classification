@@ -29,14 +29,14 @@ def bi_from_uni(unis):
                 break
         return bis
 
-def make_dictionaries(documents, parser):
+def make_dictionaries(documents, parser, stemmer):
     
     unigrams = corpora.Dictionary()
     bigrams = corpora.Dictionary()
 
     for d in documents:
         # Get unigrams (lemmas)
-        unis = [t for t in parser(d)] 
+        unis = [t for t in parser(d, stemmer)] 
         # Get bigrams
         bis = bi_from_uni(unis)
         # update dictionaries
@@ -54,9 +54,9 @@ def label_iter(input_file_name):
             yield row[3]
 
 
-def make_ngrams(tweet_text, parser, unigrams, bigrams):
+def make_ngrams(tweet_text, parser, unigrams, bigrams, stemmer):
     # Tokenize and make bigrams
-    unis = [t for t in parser(tweet_text)] 
+    unis = [t for t in parser(tweet_text, stemmer)] 
     bis = bi_from_uni(unis) # Get bow representation for dictionary terms
     uni_bow = unigrams.doc2bow(unis)
     bi_bow = bigrams.doc2bow(bis)
@@ -115,7 +115,7 @@ def iteration(args):
     y_train_idx = pd.Series(shuffle(y_train.index))
 
     # Calculate the stepsize to produce 30 steps
-    n_steps = 100
+    n_steps = 30
     max_samples = X_train.shape[0]
     stepsize = max_samples // n_steps
     ## Random annotation for increasing sample sizes
@@ -189,7 +189,7 @@ def tuning_iteration(clf):
     return res
 
 
-def process_text(text):
+def process_text(text, stemmer):
     '''
     Preprocess text by:
         - Stemming
@@ -265,7 +265,7 @@ if __name__ == "__main__":
           
     ## First pass to generate uni and bigram dictionaries
     logging.info('Generating dictionaries...')
-    unigrams, bigrams = make_dictionaries(df.text, process_text)
+    unigrams, bigrams = make_dictionaries(df.text, process_text, stemmer)
 
     ## Filter vocabularies
     unigrams.filter_extremes(no_below=2, no_above=0.2, keep_n=None)
@@ -273,7 +273,8 @@ if __name__ == "__main__":
 
     ### Create document term matrices for uni and bigrams
     logging.info('Generating uni and bigram features...')
-    grams = [make_ngrams(d, process_text, unigrams, bigrams) for d in df.text]
+    grams = [make_ngrams(d, process_text, unigrams, bigrams, stemmer) 
+                         for d in df.text]
     unigram_features = matutils.corpus2dense([x[0] for x 
                                             in grams],
                                             num_terms=len(unigrams)).transpose()
@@ -324,8 +325,8 @@ if __name__ == "__main__":
     clf = SGDClassifier(penalty='elasticnet', loss='log', alpha=0.0001, 
                         l1_ratio=0.77, random_state=26661)
 
-    pool = Pool(12)
-    params = list(itertools.product(np.arange(50), [0.005, 0.01, 0.05, 0.1, 
+    pool = Pool(10)
+    params = list(itertools.product(np.arange(30), [0.005, 0.01, 0.05, 0.1, 
                                                      0.3, 0.5]))
     outputs = pool.map(iteration, params)
     pool.close()
@@ -335,7 +336,7 @@ if __name__ == "__main__":
         output.extend(o)
 
 
-    with open('../data/active_random_w_sparsity.csv', 'w') as outfile:
+    with open('../data/active_random_w_sparsity_new_data.csv', 'w') as outfile:
         writer = csv.writer(outfile, delimiter=',')
         writer.writerow(['train_size','precision','recall','f1', 'clf', 
                          'iteration', 'max_samples', 'sparsity'])
