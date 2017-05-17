@@ -124,7 +124,7 @@ if __name__ == "__main__":
         out = get_metrics(df.annotation, df.keyword_relevant) + [n_clf_relevant]
         scores.append(out)
         p = i * 100 / len(most_important_words)
-        print(f'{i} percent done')
+        print(f'{p} percent done')
 
 
     with open('../data/keyword_baseline_res.csv', 'w') as outfile:
