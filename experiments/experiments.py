@@ -136,26 +136,50 @@ if __name__ == "__main__":
                                                reverse=True)[:200]]
     most_important_words = [unigrams[x] for x in most_important_idx]    
     
-    # Get the baseline scores
+    # Get the baseline scores (keywords additive in order)
+    
+    ## Prepare data with keyword indicator variables
+    for i,k in enumerate(most_important_words):
+        df[k] = [search_keywords(x, [k]) for x in df.text]
+
     if not os.path.exists('../data/keyword_baseline_res.csv'):
         logging.info('Getting baseline scores...')
         scores = []
         for i,k in enumerate(most_important_words):
-            kw = most_important_words[:(i+1)]
-            
-            df['keyword_relevant'] = [search_keywords(x, kw) for x in df.text]
+            df['keyword_relevant'] = df.iloc[:, 3:(i+4)].sum(axis=1) != 0
             n_clf_relevant = df.keyword_relevant.sum()
             out = get_metrics(df.annotation, df.keyword_relevant) + [n_clf_relevant]
             scores.append(out)
-            p = i * 100 / len(most_important_words)
-            print(f'{p} percent done')
-
 
         with open('../data/keyword_baseline_res.csv', 'w') as outfile:
             writer = csv.writer(outfile, delimiter=',')
             writer.writerow(['precision','recall','f1', 'n_clf_pos'])
             for s in scores:
                 writer.writerow(s)
+
+    # Get the baseline scores (random draws of increasing number of keywords)
+    scores = []
+    for n_keywords in range(1, 51):
+        for iteration in range(0, 50):
+
+            keywords = list(np.random.choice(most_important_words[:50], n_keywords, 
+                                        replace=False))
+            column_idx = [list(df.columns).index(w) for w in keywords]
+            df['keyword_relevant'] = df.iloc[:, column_idx].sum(axis=1) != 0
+            
+            n_clf_relevant = df.keyword_relevant.sum()
+            metrics = get_metrics(df.annotation, df.keyword_relevant)
+            out = metrics + [n_clf_relevant, n_keywords, iteration]
+            scores.append(out)
+
+    with open('../data/keyword_baseline_randomized_res.csv', 'w') as outfile:
+        writer = csv.writer(outfile, delimiter=',')
+        writer.writerow(['precision','recall','f1', 'n_clf_pos', 'n_keywords', 
+                         'iteration'])
+        for s in scores:
+            writer.writerow(s)
+
+
 
     # Get the full system scores
 
