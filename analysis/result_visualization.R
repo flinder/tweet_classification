@@ -82,10 +82,9 @@ ggplot(df, aes(x = n_keywords, y = value, color = variable, linetype = variable)
     geom_smooth() +
     facet_wrap(~ measure) +
     ylab("") + xlab("# Keywords") +
-    guides(color=guide_legend(title="")) +
-    guides(linetype=guide_legend(title="")) +
+    guides(color=guide_legend(title=""), linetype=guide_legend(title="")) +
     scale_color_manual(values = cbPalette[-1]) +
     ylim(0,1) +
     plot_theme
 ggsave(filename = '../paper/figures/evaluation.png', width = p_width, 
-       height = 0.7 * p_width, dpi = 300)
+       height = 0.5 * p_width, dpi = 300)

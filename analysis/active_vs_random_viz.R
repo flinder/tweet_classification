@@ -11,14 +11,19 @@ dat <- read.csv('../data/active_random_w_sparsity_new_data.csv') %>%
 
 
 # Precision recall and f1 score
-p <- ggplot(dat, aes(x = train_size_perc, y = f1, color = clf,
+ggplot(dat, aes(x = train_size_perc, y = f1, color = clf,
                fill = clf, linetype = clf)) + 
     geom_point(alpha = 0.1, size = 0.3) +
     geom_smooth() +
     facet_wrap(~ as.factor(sparsity_label)) +
     theme_bw() +
-    scale_color_manual(values = cbPalette) +
-    scale_fill_manual(values = cbPalette) +
+    scale_color_manual(values = cbPalette[-1]) +
+    scale_fill_manual(values = cbPalette[-1]) +
+    guides(color = guide_legend(title = ""), fill = guide_legend(title = ""),
+           linetype = guide_legend(title = "")) +
+    plot_theme +
+    ylab("F1 Score") + xlab("Training Data Size (% of total)") +
+    ylim(0,1) +
     theme(panel.border = element_blank())
-ggsave(p, filename = '../paper/figures/active_vs_random.png', 
-       width = p_width, height = 0.6*p_width)
+ggsave(filename = '../paper/figures/active_vs_random.png', 
+       width = p_width, height = 0.6*p_width, dpi = 300)

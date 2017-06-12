@@ -9,4 +9,7 @@ plot_theme <- theme_bw() +
     theme(axis.text=element_text(size=14),
           axis.title=element_text(size=22), 
           legend.text=element_text(size=14),
-          legend.title=element_text(size=22))
+          legend.title=element_text(size=22),
+          strip.text.x = element_text(size = 14))
+
+
