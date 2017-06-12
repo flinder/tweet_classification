@@ -7,6 +7,8 @@ import itertools
 import Stemmer
 import pickle
 import os
+import glob 
+import operator
 
 import pandas as pd
 import numpy as np
@@ -29,8 +31,8 @@ def search_keywords(text, keywords):
     for word in keywords:
         m = re.search(word, text, re.IGNORECASE)
         if m is not None:
-            return 1.0
-    return 0.0
+            return True
+    return False
 
 
 def make_doc_term_mat(df, process_text, stemmer, unigrams, bigrams):
@@ -55,6 +57,21 @@ def transform_umlaute(text):
     text = re.sub('Ö', 'O', text)
     text = re.sub('ß', 's', text)
     return text
+
+def clean(word):
+    w = word.lstrip()
+    w = w.strip()
+    w = w.lower()
+    w = process_text(w, stemmer)
+    if len(w) != 1:
+        return None
+    w = w[0]
+    w = transform_umlaute(w)
+    if w == '':
+        return None
+    if len(w) > 60:
+        return None
+    return w
 
 if __name__ == "__main__":
 
@@ -108,151 +125,319 @@ if __name__ == "__main__":
     # Train oracle model to get good keywords
     # ============================================================
     
-    # Transform text to feature matrix
-    unigrams, bigrams = make_dictionaries(df.text, process_text, stemmer)    
-    X_full = make_doc_term_mat(df, process_text, stemmer, unigrams, bigrams)
+    #if not os.path.exists('oracle_clf.pkl'):
+    #    ### Get best classifier using crossvalidation
+    #    params = {'loss': ['log'],
+    #                  'penalty': ['elasticnet'],
+    #                  'alpha': np.linspace(0.00001, 0.001, 10),
+    #                  'l1_ratio': np.linspace(0,1,10)}
+    #    
+    #    mod = SGDClassifier()
+    #    clf = GridSearchCV(estimator=mod, param_grid=params, n_jobs=6)
 
-    if not os.path.exists('oracle_clf.pkl'):
-        ### Get best classifier using crossvalidation
-        params = {'loss': ['log'],
-                      'penalty': ['elasticnet'],
-                      'alpha': np.linspace(0.00001, 0.001, 10),
-                      'l1_ratio': np.linspace(0,1,10)}
-        
-        mod = SGDClassifier()
-        clf = GridSearchCV(estimator=mod, param_grid=params, n_jobs=6)
+    #    clf.fit(X_full, df.annotation)
+    #    # Store best clf
+    #    pickle.dump(clf, open('oracle_clf.pkl', 'wb'))
+    #else:
+    #    clf = pickle.load(open('oracle_clf.pkl', 'rb'))
 
-        clf.fit(X_full, df.annotation)
-        # Store best clf
-        pickle.dump(clf, open('oracle_clf.pkl', 'wb'))
-    else:
-        clf = pickle.load(open('oracle_clf.pkl', 'rb'))
+    ## Print words with largest coefficients
+    #coefs = clf.best_estimator_.coef_[0]
+    ## Get indices of largest coefs
+    #most_important_idx = [x[0] for x in sorted(enumerate(coefs), 
+    #                                           key=lambda x: x[1], 
+    #                                           reverse=True)[:n_words]]
+    #most_important_words = [unigrams[x] for x in most_important_idx]    
 
-    # Print words with largest coefficients
-    coefs = clf.best_estimator_.coef_[0]
-    # Get indices of largest coefs
-    most_important_idx = [x[0] for x in sorted(enumerate(coefs), 
-                                               key=lambda x: x[1], 
-                                               reverse=True)[:200]]
-    most_important_words = [unigrams[x] for x in most_important_idx]    
+    n_words = 30
+    replications = 20
+   
+    # Get the crowdflower words for the keywords
+    reports = glob.glob('../data/cf_report*')
+    words = []
+    for r in reports:
+        with open(r, 'r') as infile:
+            for line in infile:
+                try:
+                    w = line.strip('"\n').split(',"')[1]
+                    ws = w.split(',')
+                    words.extend(ws)
+                except IndexError:
+                    pass
     
+    clean_words = [clean(w) for w in words if clean(w) is not None]
+    keywords = {}
+    for w in clean_words:
+        keywords[w] = keywords.get(w, 0) + 1
+    
+    # Calculate weights
+    kwords = pd.DataFrame([[k,keywords[k]] for k in keywords],
+                       columns=['word', 'count'])
+    kwords['weight'] = kwords['count'] / kwords['count'].sum()
+
     # Get the baseline scores (keywords additive in order)
     
-    ## Prepare data with keyword indicator variables
-    for i,k in enumerate(most_important_words):
+    ### Prepare data with keyword indicator variables
+    for i,k in enumerate(kwords.word):
         df[k] = [search_keywords(x, [k]) for x in df.text]
 
-    if not os.path.exists('../data/keyword_baseline_res.csv'):
-        logging.info('Getting baseline scores...')
-        scores = []
-        for i,k in enumerate(most_important_words):
-            df['keyword_relevant'] = df.iloc[:, 3:(i+4)].sum(axis=1) != 0
-            n_clf_relevant = df.keyword_relevant.sum()
-            out = get_metrics(df.annotation, df.keyword_relevant) + [n_clf_relevant]
-            scores.append(out)
-
-        with open('../data/keyword_baseline_res.csv', 'w') as outfile:
-            writer = csv.writer(outfile, delimiter=',')
-            writer.writerow(['precision','recall','f1', 'n_clf_pos'])
-            for s in scores:
-                writer.writerow(s)
+    #logging.info('Getting baseline scores...')
 
     # Get the baseline scores (random draws of increasing number of keywords)
-    scores = []
-    for n_keywords in range(1, 51):
-        for iteration in range(0, 50):
 
-            keywords = list(np.random.choice(most_important_words[:50], n_keywords, 
-                                        replace=False))
-            column_idx = [list(df.columns).index(w) for w in keywords]
-            df['keyword_relevant'] = df.iloc[:, column_idx].sum(axis=1) != 0
-            
-            n_clf_relevant = df.keyword_relevant.sum()
-            metrics = get_metrics(df.annotation, df.keyword_relevant)
-            out = metrics + [n_clf_relevant, n_keywords, iteration]
-            scores.append(out)
-
-    with open('../data/keyword_baseline_randomized_res.csv', 'w') as outfile:
-        writer = csv.writer(outfile, delimiter=',')
-        writer.writerow(['precision','recall','f1', 'n_clf_pos', 'n_keywords', 
-                         'iteration'])
-        for s in scores:
-            writer.writerow(s)
-
-
-
-    # Get the full system scores
-
-    ## Initial (seed) query
-    query = [most_important_words[0]]
 
     ## Everything we need for the classifiers
     params = {'loss': ['log'],
                   'penalty': ['elasticnet'],
                   'alpha': np.linspace(0.00001, 0.001, 5), #regulariz. weight
                   'l1_ratio': np.linspace(0,1,5)}          #balance l1 l2 norm
-    
-    mod = SGDClassifier()
-    clf = GridSearchCV(estimator=mod, param_grid=params, n_jobs=10)
+ 
+    mod = SGDClassifier(loss='log', penalty='elasticnet', l1_ratio=0.5)
+    clf = GridSearchCV(estimator=mod, param_grid=params, n_jobs=3)
 
-    annot_size = 10
-    df['exp_annotated'] = False
-    df['selected'] = 0
     
+    ## Generate document term matrix for all tweets for classifier
+    unigrams, bigrams = make_dictionaries(df.text, process_text, stemmer)    
+    X_full = make_doc_term_mat(df, process_text, stemmer, unigrams, bigrams)
+
+
+
+
     scores = []
+    for n_keywords in range(5, n_words + 1):
+        logging.info(f'Number of keywords: {n_keywords}')
+        for replication in range(replications):
+            logging.info(f'Replication: {replication}')
+            df['keyword_relevant'] = False
+            df['clf_relevant'] = False
+            df['annotated'] = False
+            metrics_kw = [np.nan] * 3
+            metrics_clf = [np.nan] * 3
+               
+            # Draw keywords
+            keywords = list(np.random.choice(kwords['word'], n_keywords, 
+                                        replace=False, p=kwords['weight']))
+            column_idx = [list(df.columns).index(w) for w in keywords]
+            df['keyword_relevant'] = df.iloc[:, column_idx].sum(axis=1) != 0
+            n_selected_kw = df.keyword_relevant.sum()
 
-    # Initial query
-    df['keyword_relevant'] = [search_keywords(x, query) for x in df.text]
-    this_data = df[df.keyword_relevant == 1] 
-    
-    to_annotate = this_data.sample(50).index
-    df.loc[to_annotate, 'exp_annotated'] = True
-    
-    try:
-        for i in range(0, 199):
+            # Check if there are tweets from both classes
+            n_pos = df[df.keyword_relevant].annotation.sum()
+            if n_pos == 0:
+                logging.info('No positive samples')
+                metrics_kw = [0] * 3
+                metrics_clf = [0] * 3
+                continue
             
-            logging.info(f'Iteration: {i}')
-            # Train the model
-            logging.info('train model on last iterations query...')
-            annotated = np.where(df.loc[df.keyword_relevant == 1, 'exp_annotated'])[0]
-            clf.fit(X_full[annotated, :], df.loc[df.exp_annotated, 'annotation'])
+            else:
+                # Assess performance of keywords alone
+                metrics_kw = get_metrics(df.annotation, df.keyword_relevant)
 
-            logging.info('Query with new query terms...')
-            query.append(most_important_words[i+1])
-            df['keyword_relevant'] = [search_keywords(x, query) for x in df.text]
+                # Assess performance of keywords + clf
+                
+                ## Annotate some of the data randomly
+                n_to_annotate = n_selected_kw // 10
+                to_annotate = np.random.choice(df[df.keyword_relevant].index, 
+                                               n_to_annotate, replace=False)
+                df.loc[to_annotate, 'annotated'] = True
+                
+                # Check if there a0re samples from both classes
+                annot_sum = df.annotation.loc[df.annotated].sum()
+                if annot_sum == n_to_annotate or annot_sum == 0:
+                    logging.info('Only one class of sample in annotated data')
+                    metrics_clf = [0] * 3
+                else:
+                    # Train the clf on annotated data
+                    try:
+                        clf.fit(X_full[to_annotate, :], 
+                                df.annotation.loc[df.annotated])
+                    except:
+                        logging.info('clf_error')
+                        break
+                    kw_rel_idx = df[df.keyword_relevant].index
+
+                    # Make prediciton for all selected data
+                    pred = clf.predict(X_full[kw_rel_idx, :]).astype(bool)
+                    df.loc[kw_rel_idx, 'clf_relevant'] = pred
+                    
+                    # Evaluate
+                    metrics_clf = get_metrics(df.annotation, df.clf_relevant)
+                        
             
-            logging.info('Classifying new tweets...')
-            X_new = X_full[np.where(df.keyword_relevant == 1)[0], :]
-            pred = clf.predict(X_new)         
-            df.loc[df.keyword_relevant == 1, 'selected'] = pred
-
-            
-            # Assess performance
-            out = get_metrics(df.annotation, df.selected) + [df.selected.sum()]
-
-            # Choose tweets for next annotation step
-            logging.info('Choosing tweets for annotation...')
-            not_annotated_idx = df.loc[(df.keyword_relevant == 1) & 
-                                       (df.exp_annotated == False)].index
-            probs = clf.predict_proba(X_full[not_annotated_idx, :])[:, 1]
-            to_annot = np.argsort((0.5 - probs)**2)[:annot_size]
-            df.loc[not_annotated_idx[to_annot], 'exp_annotated'] = 1
-            n_annotated = df.exp_annotated.sum()
-
-            out = out + [n_annotated]
+            out = metrics_kw + metrics_clf + [n_selected_kw, n_keywords, 
+                                              replication]
+            print(out)
             scores.append(out)
-    except KeyboardInterrupt:
-        with open('../data/keyword_clf.csv', 'w') as outfile:
-            writer = csv.writer(outfile, delimiter=',')
-            writer.writerow(['precision','recall','f1', 'n_selected', 'n_annotated'])
-            for s in scores:
-                writer.writerow(s)
-        raise
 
-    with open('../data/keyword_clf.csv', 'w') as outfile:
+    with open('../data/experiment_results.csv', 'w') as outfile:
         writer = csv.writer(outfile, delimiter=',')
-        writer.writerow(['precision','recall','f1', 'n_selected', 'n_annotated'])
+        writer.writerow(['kw_precision','kw_recall','kw_f1', 
+                         'clf_precision','clf_recall','clf_f1',
+                         'n_selected', 'n_keywords', 
+                         'replication'])
         for s in scores:
             writer.writerow(s)
 
 
+
+
+    # Get the active learning scores
+    iterations = 25
+    replications = 30
+    n_annotate_step = 20
+    scores = []
+    queries = []
+    negatives = []
+
+    ## Everything we need for the classifiers
+    params = {'loss': ['log'],
+                  'penalty': ['elasticnet'],
+                  'alpha': np.linspace(0.00001, 0.001, 5), #regulariz. weight
+                  'l1_ratio': np.linspace(0,1,5)}          #balance l1 l2 norm
+ 
+    mod = SGDClassifier(loss='log', penalty='elasticnet', l1_ratio=0.5)
+    clf = GridSearchCV(estimator=mod, param_grid=params, n_jobs=3)
+
+
+
+    ## Replications
+    for replication in range(18, replications):
+
+        logging.info(f'Replication: {replication}')
+
+        # Reset everyting
+        df['keyword_relevant'] = False
+        df['clf_relevant'] = False
+        df['annotated'] = False
+        metrics_clf = [np.nan] * 3
+        metrics_kw = [np.nan] * 3
+
+        # Choose seed keyword
+        keywords = list(np.random.choice(kwords['word'], 5, 
+                                    replace=False, p=kwords['weight']))
+        logging.info(f'Seed keyword: {keywords}')
+
+        # Run first query expansion than active learning clf up to 100 words
+        for iteration in range(iterations):
+            logging.info(f'Iteration {iteration}')
+            if iteration > 0:
+                # Expand query
+                keywords = keywords + [new_keyword]
+                logging.info(f'Querying with {keywords}')
+
+            # Query with the current keywords
+            df['keyword_relevant'] = [search_keywords(t, keywords) for t in df.text]
+            n_selected_kw = df.keyword_relevant.sum()
+            logging.info(f"Query returned {n_selected_kw} tweets")
+
+            # Check if there are tweets from both classes
+            n_pos = df[df.keyword_relevant].annotation.sum()
+            if n_pos == 0:
+                logging.info('No positive samples')
+                metrics_kw = [0] * 3
+                metrics_clf = [0] * 3
+                continue
+            else:
+                metrics_kw = get_metrics(df.annotation, df.keyword_relevant)
+ 
+
+            # Annotate data (random draw) in first iteration
+            if iteration == 0:
+                n_to_annotate = min(n_selected_kw, n_annotate_step)
+                to_annotate = np.random.choice(df[df.keyword_relevant].index, 
+                                               n_to_annotate, replace=False)
+                df.loc[to_annotate, 'annotated'] = True
+            
+            # Check if there are samples from both classes in annotated data
+            annot_sum = df.annotation.loc[df.annotated].sum()
+            n_samples = df.annotated.sum()
+            if annot_sum == n_samples or annot_sum == 0:
+                logging.info('Only one class of sample in annotated data')
+                metrics_clf = [0] * 3
+                out = metrics_kw + metrics_clf + [replication, iteration] 
+                scores.append(out)
+                break
+            else:
+                # Train the clf on annotated data
+
+                logging.info("Training clf...")
+                logging.info(f"Number of annotated samples: {n_samples}")
+                logging.info(f"Number of annotated positives: {annot_sum}")
+
+                annotated = df[df.annotated].index
+                clf.fit(X_full[annotated, :], 
+                        df.annotation.loc[df.annotated])
+
+                kw_rel_not_annot = df[df.keyword_relevant & ~df.annotated].index
+                kw_rel = df[df.keyword_relevant].index
+
+                # Make prediciton from clf for all data selected by query
+                n = len(kw_rel)
+                logging.info(f"Classifying all {n} queried samples")
+                pred = clf.predict(X_full[kw_rel, :]).astype(bool)
+
+                df.loc[kw_rel, 'clf_relevant'] = pred
+                n_selected_clf = df.clf_relevant.sum()
+                
+                # Evaluate
+                metrics_clf = get_metrics(df.annotation, df.clf_relevant)
+                out = metrics_kw + metrics_clf + [replication, iteration, 
+                                                  n_selected_kw, n_selected_clf] 
+                scores.append(out)
+                logging.info(out[:6])
+
+                # Choose tweets for annotation in next round
+
+                ## Get predicted probabilities for queried but not annotated
+                # tweets
+                n = len(kw_rel_not_annot)
+                logging.info(f"Predicting probability for remaining {n} samples")
+                try:
+                    probs = clf.predict_proba(X_full[kw_rel_not_annot, :])[:, 1]
+
+                    n_to_annotate = min(n_selected_kw, n_annotate_step)
+                    logging.info(f"Annotating {n_to_annotate} new samples")
+                    to_annotate = np.argsort((0.5 - probs)**2)[:n_to_annotate]
+                    df.loc[kw_rel_not_annot[to_annotate], 'annotated'] = True
+                except ValueError as e:
+                    logging.error(f"Error in prediction: {e}")
+               
+
+                # Select new query terms
+                ## Train new clf
+                pos_annotated = df[(df.annotated) & (df.annotation == 1)].index
+                nr = np.random.choice(df[df.keyword_relevant == False].index, 
+                                      len(pos_annotated), replace=False)
+                sel = list(pos_annotated) + list(nr)
+                clf.fit(X_full[sel, :], np.array([1]*len(nr)+[0]*len(nr)))
+                
+                i = 1
+                while True:
+                    prop = unigrams[np.argsort(clf.best_estimator_.coef_)[0][-i]]
+                    if prop in keywords or prop in negatives:
+                        i += 1
+                    else:
+                        inp = input(f"Proposal: {i:}, {prop}")
+                        if inp == 'y':
+                            new_keyword = prop
+                            break
+                        elif inp == 'n':
+                            i += 1
+                            negatives.append(prop)
+                            continue
+                        else:
+                            break
+
+                logging.info(f'New keyword: {new_keyword}')
+
+        queries.append(keywords)
+    
+    pickle.dump(queries, open('queries.pkl', 'wb'))
+    
+    with open('../data/full_system_scores_1.csv', 'w') as outfile:
+        writer = csv.writer(outfile, delimiter=',')
+        writer.writerow(['precision_kw','recall_kw','f1_kw', 'precision_clf', 
+                         'recall_clf','f1_clf','replication', 'iteration',
+                         'n_selected_kw', 'n_selected_clf'])
+        for s in scores:
+            writer.writerow(s)
