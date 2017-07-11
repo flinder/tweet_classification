@@ -1,48 +1,17 @@
 library(reshape2)
 library(tidyverse)
-
+library(xtable)
 
 source('plot_theme.R')
 
-# Randomized increasing number
 
-dat <- read_csv('../data/experiment_results.csv') #%>%
-
-df <- select(dat, -n_selected, -replication, -clf_precision, -clf_recall, 
-             -kw_precision, -kw_recall) %>% 
-    melt(id.vars = c("n_keywords")) %>%
-    tbl_df() 
-colnames(df) <- c("n_keywords", "Measure", "Score")
-
-ggplot(df, aes(x = n_keywords, y = Score, color = Measure, linetype = Measure)) +
-    geom_point(size = 0.3, alpha = 0.2, position = "jitter") +
-    stat_smooth() +
-    scale_color_manual(values = cbPalette[-1]) + 
-    plot_theme
-
-
-# System with manual query expansion 
-dat <- read_csv('../data/full_system_scores.csv')
-
-df <- dat %>%
-    mutate(n_keywords = iteration + 5) %>%
-    select(-iteration, -replication, -recall_clf, -recall_kw, -precision_clf,
-           -precision_kw) %>%
-    melt(id.vars = c("n_keywords")) %>%
-    tbl_df() 
-colnames(df) <- c("n_keywords", "Measure", "Score")
-
-ggplot(df, aes(x = n_keywords, y = Score, color = Measure, linetype = Measure)) +
-    geom_point(size = 1, alpha = 0.3, position = "jitter") +
-    stat_smooth() +
-    scale_color_manual(values = cbPalette[-1]) + 
-    plot_theme
-
-ggplot(dat) + geom_point(aes(x = recall_clf, y = recall_kw)) + geom_abline(slope = 1)
-
-
-
-
+# Crowdflower word table
+kw <- read_csv('../data/crowdflower_keywords.csv')
+kw$translation <- NA
+tab <- xtable(kw[1:10, ], digits = 2, 
+              caption = "List of keywords suggested by survey participants.",
+              label = "tab:cf_keywords")
+print(tab, file = '../paper/tables/cf_keywords.tex', include.rownames = FALSE)
 
 keyword <- read_csv('../data/experiment_results.csv') %>%
     filter(n_keywords > 4 & n_keywords < 31) %>%
@@ -88,3 +57,16 @@ ggplot(df, aes(x = n_keywords, y = value, color = variable, linetype = variable)
     plot_theme
 ggsave(filename = '../paper/figures/evaluation.png', width = p_width, 
        height = 0.5 * p_width, dpi = 300)
+
+
+# Some stats for the discussion
+
+stats <- 
+    group_by(df, variable, measure) %>%
+    summarize(min = min(value),
+              lo = quantile(value, 0.025),
+              avg = mean(value), 
+              median = median(value),
+              hi = quantile(value, 0.975),
+              max = max(value)) %>%
+    print()
