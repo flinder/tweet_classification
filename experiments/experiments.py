@@ -73,6 +73,18 @@ def clean(word):
         return None
     return w
 
+def draw_keywords(n, terms):
+    '''
+    Draw words from collection of words with weights
+
+    returns
+    list of words
+    collection of words with drawn words removed
+    '''
+    selected = terms.sample(n=n, replace=False, weights=terms['weight'])
+    terms = terms.drop(selected.index)
+    return list(selected['word']), terms
+
 if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
@@ -121,37 +133,7 @@ if __name__ == "__main__":
     logging.info('Loading nlp pipeline...')
     stemmer = Stemmer.Stemmer('german').stemWord 
     
-    # ============================================================
-    # Train oracle model to get good keywords
-    # ============================================================
-    
-    #if not os.path.exists('oracle_clf.pkl'):
-    #    ### Get best classifier using crossvalidation
-    #    params = {'loss': ['log'],
-    #                  'penalty': ['elasticnet'],
-    #                  'alpha': np.linspace(0.00001, 0.001, 10),
-    #                  'l1_ratio': np.linspace(0,1,10)}
-    #    
-    #    mod = SGDClassifier()
-    #    clf = GridSearchCV(estimator=mod, param_grid=params, n_jobs=6)
-
-    #    clf.fit(X_full, df.annotation)
-    #    # Store best clf
-    #    pickle.dump(clf, open('oracle_clf.pkl', 'wb'))
-    #else:
-    #    clf = pickle.load(open('oracle_clf.pkl', 'rb'))
-
-    ## Print words with largest coefficients
-    #coefs = clf.best_estimator_.coef_[0]
-    ## Get indices of largest coefs
-    #most_important_idx = [x[0] for x in sorted(enumerate(coefs), 
-    #                                           key=lambda x: x[1], 
-    #                                           reverse=True)[:n_words]]
-    #most_important_words = [unigrams[x] for x in most_important_idx]    
-
-    n_words = 30
-    replications = 20
-   
+  
     # Get the crowdflower words for the keywords
     reports = glob.glob('../data/cf_report*')
     words = []
@@ -166,16 +148,22 @@ if __name__ == "__main__":
                     pass
     
     clean_words = [clean(w) for w in words if clean(w) is not None]
-    keywords = {}
+    survey_keywords = {}
     for w in clean_words:
-        keywords[w] = keywords.get(w, 0) + 1
+        survey_keywords[w] = survey_keywords.get(w, 0) + 1
     
     # Calculate weights
-    kwords = pd.DataFrame([[k,keywords[k]] for k in keywords],
+    kwords = pd.DataFrame([[k,survey_keywords[k]] for k in survey_keywords],
                        columns=['word', 'count'])
     kwords['weight'] = kwords['count'] / kwords['count'].sum()
 
+    # Write to file for the table
+    kwords.sort_values(by='count', ascending=False).to_csv(
+            '../data/crowdflower_keywords.csv', index=False
+            )
+
     # Get the baseline scores (keywords additive in order)
+    # ==========================================================================
     
     ### Prepare data with keyword indicator variables
     for i,k in enumerate(kwords.word):
@@ -201,22 +189,29 @@ if __name__ == "__main__":
     X_full = make_doc_term_mat(df, process_text, stemmer, unigrams, bigrams)
 
 
-
-
+    n_words = 29
+    replications = 21
     scores = []
-    for n_keywords in range(5, n_words + 1):
-        logging.info(f'Number of keywords: {n_keywords}')
-        for replication in range(replications):
-            logging.info(f'Replication: {replication}')
+    
+    for replication in range(replications):
+        logging.info(f'Replication: {replication}')
+        
+        # Draw initial keywords
+        keywords, terms = draw_keywords(4, kwords[['word', 'weight']])
+
+        for i in itertools.repeat(None, n_words - 4):
+            # add a keyword
+            new_word, terms = draw_keywords(1, terms)
+            keywords.extend(new_word)
+            n = len(keywords)
+            logging.info(f'Number of keywords: {n}')
+
             df['keyword_relevant'] = False
             df['clf_relevant'] = False
             df['annotated'] = False
             metrics_kw = [np.nan] * 3
             metrics_clf = [np.nan] * 3
                
-            # Draw keywords
-            keywords = list(np.random.choice(kwords['word'], n_keywords, 
-                                        replace=False, p=kwords['weight']))
             column_idx = [list(df.columns).index(w) for w in keywords]
             df['keyword_relevant'] = df.iloc[:, column_idx].sum(axis=1) != 0
             n_selected_kw = df.keyword_relevant.sum()
@@ -264,8 +259,7 @@ if __name__ == "__main__":
                     metrics_clf = get_metrics(df.annotation, df.clf_relevant)
                         
             
-            out = metrics_kw + metrics_clf + [n_selected_kw, n_keywords, 
-                                              replication]
+            out = metrics_kw + metrics_clf + [n_selected_kw, n, replication]
             print(out)
             scores.append(out)
 
@@ -282,8 +276,8 @@ if __name__ == "__main__":
 
 
     # Get the active learning scores
-    iterations = 25
-    replications = 30
+    iterations = 50
+    replications = 50
     n_annotate_step = 20
     scores = []
     queries = []
@@ -301,7 +295,7 @@ if __name__ == "__main__":
 
 
     ## Replications
-    for replication in range(18, replications):
+    for replication in range(replications):
 
         logging.info(f'Replication: {replication}')
 
@@ -432,7 +426,6 @@ if __name__ == "__main__":
 
         queries.append(keywords)
     
-    pickle.dump(queries, open('queries.pkl', 'wb'))
     
     with open('../data/full_system_scores_1.csv', 'w') as outfile:
         writer = csv.writer(outfile, delimiter=',')
@@ -441,3 +434,36 @@ if __name__ == "__main__":
                          'n_selected_kw', 'n_selected_clf'])
         for s in scores:
             writer.writerow(s)
+
+
+    # Analyze the queries
+
+    ## Count them
+    qe_terms = {}
+    total_expansion = 0
+    for query in queries:
+        for word in query:
+            qe_terms[word] = qe_terms.get(word, 0) + 1
+            total_expansion += 1
+
+    # Normalize expansion and query terms
+    for term in qe_terms:
+        qe_terms[term] = round(qe_terms[term] / total_expansion, 3)
+
+    for term in survey_keywords:
+        survey_keywords[term] = round(survey_keywords[term] / kwords['count'].sum(), 3)
+
+    expansion_terms = sorted(qe_terms.items(), key=lambda x: x[1],
+                             reverse=True)
+    survey_terms = sorted(survey_keywords.items(), key=lambda x: x[1],
+                          reverse=True)
+    
+    # Write top 10 to csv
+    with open('../data/survey_expansion_terms.csv', 'w') as outfile:
+        writer = csv.writer(outfile, delimiter=',')
+        writer.writerow(['rank', 'survey_term', 'proportion', 'expansion_term',
+                         'proportion'])
+        for st, et, i in zip(survey_terms, expansion_terms, range(0, 10)):
+            writer.writerow([i+1, st[0], st[1], et[0], et[1]])
+
+
