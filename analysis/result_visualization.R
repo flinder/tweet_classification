@@ -18,8 +18,8 @@ keyword <- read_csv('../data/experiment_results.csv') %>%
     mutate(keyword_precision = kw_precision,
            keyword_recall = kw_recall,
            keyword_f1 = kw_f1) %>%
-    select(keyword_precision, keyword_recall, keyword_f1, n_keywords) %>%
-    melt(id.vars = "n_keywords") %>% 
+    select(keyword_precision, keyword_recall, keyword_f1, n_keywords, replication) %>%
+    melt(id.vars = c("n_keywords", "replication")) %>% 
     tbl_df() %>%
     mutate(measure = sapply(variable, 
                             function(x) unlist(strsplit(as.character(x), '_'))[2]),
@@ -36,8 +36,8 @@ expansion <- read_csv('../data/full_system_scores_1.csv')  %>%
            full_recall = recall_clf,
            full_f1 = f1_clf) %>%
     select(expansion_precision, expansion_recall, expansion_f1, full_precision, 
-           full_recall, full_f1, n_keywords) %>%
-    melt(id.vars = "n_keywords") %>% 
+           full_recall, full_f1, n_keywords, replication) %>%
+    melt(id.vars = c("n_keywords", "replication")) %>% 
     tbl_df() %>%
     mutate(measure = sapply(variable, 
                             function(x) unlist(strsplit(as.character(x), '_'))[2]),
@@ -57,6 +57,22 @@ ggplot(df, aes(x = n_keywords, y = value, color = variable, linetype = variable)
     plot_theme
 ggsave(filename = '../paper/figures/evaluation.png', width = p_width, 
        height = 0.5 * p_width, dpi = 300)
+
+
+
+ggplot(df, aes(x = n_keywords, y = value, color = variable)) +
+    geom_line(aes(group = replication), alpha = 0.6, size = 0.2, position = "jitter") +
+    geom_smooth() +
+    facet_wrap(~ variable + measure) +
+    ylab("") + xlab("# Keywords") +
+    guides(color=FALSE) +
+    scale_color_manual(values = cbPalette[-1]) +
+    ylim(0,1) +
+    scale_y_continuous(breaks=c(0, 0.5, 1)) +
+    theme(strip.text = element_text(size=2)) +
+    plot_theme
+ggsave(filename = '../paper/figures/evaluation_detail.png', width = p_width, 
+       height = p_width, dpi = 300)
 
 
 # Some stats for the discussion
