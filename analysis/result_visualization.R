@@ -13,8 +13,8 @@ tab <- xtable(kw[1:10, ], digits = 2,
               label = "tab:cf_keywords")
 print(tab, file = '../paper/tables/cf_keywords.tex', include.rownames = FALSE)
 
-keyword <- read_csv('../data/experiment_results.csv') %>%
-    filter(n_keywords > 4 & n_keywords < 31) %>%
+keyword <- read_csv('../data/keyword_only_results.csv') %>%
+    filter(n_keywords > 4 & n_keywords < 300) %>%
     mutate(keyword_precision = kw_precision,
            keyword_recall = kw_recall,
            keyword_f1 = kw_f1) %>%
@@ -26,7 +26,7 @@ keyword <- read_csv('../data/experiment_results.csv') %>%
            variable = sapply(variable, 
                              function(x) unlist(strsplit(as.character(x), '_'))[1]))
 
-expansion <- read_csv('../data/full_system_scores_1.csv')  %>%
+expansion <- read_csv('../data/full_system_scores_2.csv')  %>%
     filter(f1_clf > 0) %>%
     mutate(n_keywords = iteration + 5,
            expansion_precision = precision_kw,
@@ -47,7 +47,7 @@ expansion <- read_csv('../data/full_system_scores_1.csv')  %>%
 df <- rbind(keyword, expansion)
 
 ggplot(df, aes(x = n_keywords, y = value, color = variable, linetype = variable)) +
-    #geom_point(alpha = 0.6, size = 0.2, position = "jitter") +
+    #geom_point(alpha = 0.6, isze = 0.2, position = "jitter") +
     geom_smooth() +
     facet_wrap(~ measure) +
     ylab("") + xlab("# Keywords") +
@@ -76,7 +76,6 @@ ggsave(filename = '../paper/figures/evaluation_detail.png', width = p_width,
 
 
 # Some stats for the discussion
-
 stats <- 
     group_by(df, variable, measure) %>%
     summarize(min = min(value),
