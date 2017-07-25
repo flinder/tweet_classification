@@ -1,3 +1,4 @@
+import copy
 import csv
 import spacy 
 import re
@@ -9,6 +10,7 @@ import pickle
 import os
 import glob 
 import operator
+import time
 
 import pandas as pd
 import numpy as np
@@ -18,9 +20,9 @@ from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import f1_score, precision_score, recall_score, precision_recall_fscore_support
+from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.utils import shuffle
 from multiprocessing import Pool
-from time import time
 from scipy.special import gamma as G
 
 
@@ -32,7 +34,7 @@ class TextParser(object):
 
     def __init__(self, language):
         self.parser = spacy.load(language)
-        self.stemmer = Stemmer.Stemmer('german').stemWord 
+        self.stemmer = Stemmer.Stemmer(language).stemWord 
         self.rm_chars = re.compile('[@/\\\\]')
 
     def tokenize(self, text, stem=False):
@@ -54,7 +56,7 @@ def get_metrics(y_true, y_pred):
     rec = recall_score(y_true, y_pred)
     return [prec, rec, f1]
 
-def make_dtm(documents, parser, normalize=True):
+def make_dtm(documents, parser, normalize=True, entities=False):
     '''
     Tokenize and stem documents and store in sparse matrix. Note this is in
     memory, so don't use on large text collections
@@ -75,6 +77,48 @@ def make_dtm(documents, parser, normalize=True):
                        columns=[x[1] for x in vocabulary.items()])
 
     return dtm
+
+def make_index(documents, users, parser, mode):
+    unigrams = []
+    vocabulary = corpora.Dictionary()
+    bow = []
+    for doc, user in zip(documents, users):
+        out = []
+        if mode == 'users':
+            parser_ = copy.copy(parser)
+            parser_.rm_chars = re.compile('[/\\\\]')
+            unis = [t for t in parser_.tokenize(doc, stem=False)]
+            out.append('@' + user)
+            for u in unis:
+                if re.match('@[A-Za-z0-9_]+', u) is not None:
+                   out.append(u) 
+        if mode == 'hashtags':
+            unis = [t for t in parser.tokenize(doc, stem=False)]
+            skip = False
+            for i,u in enumerate(unis):
+                if skip:
+                    skip = False
+                    continue
+                if u == '#':
+                    try:
+                        ht = u + unis[i+1]
+                        if re.match('#[A-Za-z0-9_]+', ht) is not None:
+                            out.append(ht)
+                        skip = True
+                    except IndexError: 
+                        break
+
+        unigrams.append(out)
+        bow.append(vocabulary.doc2bow(out, allow_update=True))
+
+    dtm = pd.DataFrame(matutils.corpus2dense(bow, num_terms=len(vocabulary),
+                                             num_docs=len(bow)).transpose(),
+                        columns=[x[1] for x in vocabulary.items()])
+
+    return dtm
+
+      
+
 
 def clean(word, parser):
     w = word.lstrip()
@@ -130,7 +174,7 @@ def keyword_likelihood(df, dtm):
 
 def fighting_words(df, dtm):
     kw_rel = df['keyword_relevant']
-    clf_rel = df['clf_relevant']
+    clf_rel = df['clf_active_relevant']
     X = dtm.loc[kw_rel].groupby(clf_rel.loc[kw_rel]).sum()
     n = X.sum(axis=1)
     N = n.sum()
@@ -139,6 +183,8 @@ def fighting_words(df, dtm):
     a = (a0 * y) / N
     a0i = a0 * n / N
     # Odds ratios for the irrelevant documents
+    l = X.index
+    print(f'Index labels X: {l}')
     row = X.loc[False]
     irel_ratios = (np.log((row+a)/(row.sum()+a0i.iloc[0]-row-a))
                    -np.log((y+a)/(N+a0-y-a)))
@@ -150,41 +196,335 @@ def fighting_words(df, dtm):
 
     return rel_ratios, irel_ratios
 
+def replication_2_step(df, n_iterations, seed_keywords, 
+                       dtm_search, dtm_clf, n_annotate_step):
+    '''
+    Execute one replication of the 2 stage data retrieval experiment
+
+    Arguments:
+    ---------- 
+    df: the full dataset
+    n_iterations: How many keywords to add
+    accepted_keywords: list of words a human would accept as search terms
+    seed_keywords: pandas df with list of seed search terms and weights
+    dtm_search: A document term matrix containng the full non-normalized 
+        vocabulary.
+    dtm_clf: A document term matrix with normalized vocabulary
+    n_annotate_step: Number of tweets to annotate for 2.step (per iteration)
+
+    Returns:
+    ---------- 
+    A list with a dictionary for the results of each iteration. The dict
+    had the following keys:
+        * iteration: int, iteration #
+        * selected_search: pandas index with selected tweets from search terms
+        * selected_clf_active: pandas index with selected tweets after 2. step
+            with active learning annotation
+        * selected_clf_random: pandas index with selected tweets after 2. 
+            step with random annotation
+        * clf_success: Could 2. step be executed
+        * search_terms: the terms used in this iteration
+    '''
+
+    global accepted_keywords
+    out = [] 
+    keywords = []
+    next_keyword = None
+    to_annotate = None
+    random_for_active = True
+    valid_search_terms = set(dtm_search.columns)
+    params = {'loss': ['log'],
+                  'penalty': ['elasticnet'],
+                  'alpha': np.linspace(0.00001, 0.001, 5), #regulariz. weight
+                  'l1_ratio': np.linspace(0,1,5)}          #balance l1 l2 norm
+ 
+    mod = SGDClassifier()
+    clf_active = GridSearchCV(estimator=mod, param_grid=params, n_jobs=10)
+    clf_random = GridSearchCV(estimator=mod, param_grid=params, n_jobs=10)
+    #clf_active = SGDClassifier(loss='log', penalty='elasticnet', l1_ratio=0.5)
+    #clf_random = SGDClassifier(loss='log', penalty='elasticnet', l1_ratio=0.5)
+
+    for iteration in range(iterations):
+        print(f'iteration {iteration}')
+        # Create default output object
+        iter_out = {'iteration': iteration, 
+                    'selected_search': None,
+                    'selected_clf_random': None,
+                    'selected_clf_active': None,
+                    'clf_random_success': False,
+                    'clf_active_success': False}
+        
+        
+        # Draw next keyword if necessary
+        if next_keyword is None:
+            print('Next keyword is none')
+            next_keyword, seed_keywords = draw_keywords(
+                    1, seed_keywords[['word', 'weight']]
+                    )
+            print(f'Drew new keyword: {next_keyword}')
+
+        # Add the next keyword to search term list and store in output
+        keywords.extend(next_keyword)
+        print(f'Keywords: {keywords}')
+        iter_out['search_terms'] = keywords
+       
+        # Query the data with the keywords
+        keywords = [w for w in keywords if w in valid_search_terms]
+        if len(keywords) == 0: 
+            out.append(iter_out)
+            print(f'No valid keywords')
+            next_keyword = None
+            print('CONTINUE')
+            #continue
+
+        df['keyword_relevant'] = dtm_search[keywords].sum(axis=1) > 0
+
+        # Store the search selection
+        iter_out['selected_search'] = df[df['keyword_relevant']].index
+        
+        n = len(iter_out['selected_search'])
+        print(f'# Query results: {n}')
+        kw_rel = df[df['keyword_relevant']].index
+
+        # Check if there are samples left for annotation
+        selected_not_annotated_random = df[df.keyword_relevant & 
+                                           ~df.annotated_random].index
+        selected_not_annotated_active = df[df.keyword_relevant & 
+                                           ~df.annotated_active].index
+
+        train_random = (len(selected_not_annotated_random) > 0)
+        train_active = (len(selected_not_annotated_active) > 0)
+        print(f'train_random: {train_random}')
+        print(f'train_active: {train_active}')
+
+        
+        # Random classifier
+        if train_random:
+            # Annotate a random selection
+            n_selected_not_annotated = len(selected_not_annotated_random)
+            n_to_annotate = min(n_selected_not_annotated, n_annotate_step)
+            to_annotate_random = np.random.choice(selected_not_annotated_random, 
+                                                  n_to_annotate, 
+                                                  replace=False)
+            df.loc[to_annotate_random, 'annotated_random'] = True
+            nar = df['annotated_random'].sum()
+            print(f'# annotated random: {nar}')
+            
+            # Check if the data allows to train the clf
+            train_random, _ = check_sample(df, n_annotate_step)            
+
+            if train_random:
+                # Train the model
+                annotated = df[df.annotated_random].index
+                clf_random.fit(dtm_clf.loc[annotated].as_matrix(), 
+                        df.annotation.loc[df.annotated_random])
+                iter_out['clf_random_success'] = True
+                print('Random learner trained')
+                # Classify all query results
+                pred = clf_random.predict(dtm_clf.loc[kw_rel]).astype(bool)
+                df.loc[kw_rel, 'clf_random_relevant'] = pred
+                iter_out['selected_clf_random'] = \
+                        df[df['clf_random_relevant']].index
+                ns = len(iter_out['selected_clf_random'])
+                print(f'# selected by random learner: {ns}')
+
+
+            else:
+                print('Class conditions not fulfilled for random')
+                iter_out['selected_clf_random'] = iter_out['selected_search']
+
+        # Active learning classifier
+        if train_active:
+            # Annotate the sample (if first iteration or if no probabilities
+            # from last iteration use a random sample
+            if random_for_active:
+                print('annotating randomly for active learner')
+                n_selected_not_annotated = len(selected_not_annotated_active)
+                n_to_annotate = min(n_selected_not_annotated, n_annotate_step)
+                to_annotate_active = np.random.choice(selected_not_annotated_active, 
+                                                      n_to_annotate, 
+                                                      replace=False)
+                df.loc[to_annotate_active, 'annotated_active'] = True
+                naa = df['annotated_active'].sum()
+                print(f'# annotated active: {naa}')
+     
+                random_for_active = False
+
+            # Check if the data allows to train the clf
+            _, train_active = check_sample(df, n_annotate_step)            
+            
+            if train_active:
+                # Train the model
+                annotated = df[df.annotated_active].index
+                clf_active.fit(dtm_clf.loc[annotated].as_matrix(), 
+                        df.annotation.loc[df.annotated_active])
+                iter_out['clf_active_success'] = True
+                print('Active learner trained')
+
+                # Predict for all query results
+                pred = clf_active.predict_proba(dtm_clf.loc[kw_rel])[:, 1]
+                df.loc[kw_rel, 'clf_active_relevant'] = pred >= 0.5
+                iter_out['selected_clf_active'] = \
+                        df[df['clf_active_relevant']].index
+                ns = len(iter_out['selected_clf_active'])
+                print(f'# selected by active learner: {ns}')
+
+                # Find tweets to annotate next round (for active learner)
+                kw_rel_not_annotated = df[df['keyword_relevant'] & 
+                                          ~df['annotated_active']].index
+                n_krna = len(kw_rel_not_annotated)
+                if n_krna == 0:
+                    random_for_active = True
+                else:
+                    all_probs = pd.Series(pred)
+                    all_probs.index = kw_rel
+                    probs = all_probs.loc[kw_rel_not_annotated]
+
+                    n_to_annotate = min(n_krna, n_annotate_step)
+                    to_annotate_active = np.argsort((0.5 - probs)**2)[:n_to_annotate]
+                    df.loc[kw_rel_not_annotated[to_annotate_active], 
+                           'annotated_active'] = True
+                    naa = df['annotated_active'].sum()
+                    print(f'# annotated for active learning: {naa}') 
+
+                # Expand query for next iteration
+
+                ## Check if there are predictions for both classes
+                ncp = df['clf_active_relevant'].sum()
+
+                if ncp > 0 and ncp < n:
+                    print('Getting new keywords')
+                    word_scores, _ = fighting_words(df, dtm_search)
+                    word_scores.sort_values(ascending=False, inplace=True)
+                    prop = word_scores[~word_scores.index.isin(keywords)].iloc[:50]
+                    # First check if there is a word that has been chosen in
+                    # previous iterations. If so choose that:
+                    next_keyword = None
+                    for w in prop.index:
+                        if w in accepted_keywords:
+                            next_keyword = [w]
+                    #if next_keyword is None:
+                    #    print(prop)
+                    #    while True:
+                    #        inp = input(f"Type new word: ")
+                    #        if inp == '':
+                    #            next_keyword = None
+                    #        else:
+                    #            accepted_keywords.append(inp)
+                    #            next_keyword = [inp]
+                    #        break
+                else:
+                    next_keyword = None
+
+            else:
+                print('Class conditions not fulfilled for active')
+                iter_out['selected_clf_active'] = iter_out['selected_search']
+                random_for_active = True
+                next_keyword = None
+
+        else:
+            iter_out['selected_clf_active'] = iter_out['selected_search']
+            random_for_active = True
+            next_keyword = None
+        
+        out.append(iter_out)
+
+    return out
+    
+
+
+def check_sample(df, n_annotate_step):
+    '''
+    Check if the current datastructure allows training of clfs
+    '''
+    random_good = True
+    active_good = True
+    n_annotated = df['annotated_random'].sum()
+    n_positive_random = df[df['annotated_random']].annotation.sum()
+    n_positive_active = df[df['annotated_active']].annotation.sum()
+
+    if n_positive_random < 2 or (n_annotated - n_positive_random) < 2:
+        random_good = False
+    if n_positive_active < 2 or (n_annotated - n_positive_active) < 2:
+        active_good = False
+
+    return random_good, active_good
+
+def evaluate_selection(selection):
+    if selection is None:
+        selection = []
+    # Precision and recall
+    if len(selection) > 0:
+        y_true = df['annotation']
+        y_pred = expand_vector(selection, len(y_true))
+        f1 = f1_score(y_true, y_pred)
+        prec = precision_score(y_true, y_pred)
+        rec = recall_score(y_true, y_pred)
+        # Difference in distributions for hashtags and users
+        ht = (dtm_hashtags
+              .loc[selection]
+              .sum(axis=0)
+              .values
+              .reshape(1, -1))
+        ht_diff = cosine_similarity(ht, gt_hashtags)[0][0]
+        us = (dtm_users
+              .loc[selection]
+              .sum(axis=0)
+              .values
+              .reshape(1, -1))
+        us_diff = cosine_similarity(us, gt_users)[0][0]
+    else:
+        f1 = 0
+        prec = 0
+        rec = 0
+        us_diff = 0
+        ht_diff = 0
+    return {'precision': prec, 'recall': rec, 'f1': f1,
+            'user_similarity': us_diff, 'hashtag_similarity': ht_diff, 
+            }
+
+def expand_vector(sparse_vector, length):
+    out = np.full(length, False, bool)
+    out[sparse_vector] = True
+    return out
+
+
 
 if __name__ == "__main__":
 
-    logging.basicConfig(level=logging.INFO)
-    
     # Create sql connection
-    logging.info('Connecting to DB...')
+    print('Connecting to DB...')
     _, engine = make_session()
 
     # Get the data  
     query = ('SELECT cr_results.tweet_id,' 
              '       cr_results.annotation,' 
              '       cr_results.trust,'
-             '       tweets.text '
+             '       tweets.text,'
+             '       users.screen_name '
              'FROM cr_results '
-             'INNER JOIN tweets on tweets.id=cr_results.tweet_id')
+             'INNER JOIN tweets ON tweets.id=cr_results.tweet_id '
+             'INNER JOIN users ON users.id=tweets.user_id ')
     
-    logging.info('Getting the data...')
+    print('Getting the data...')
     df = pd.read_sql(sql=query, con=engine)
     
     df.replace(to_replace=['relevant', 'irrelevant', 'None'], 
                value=[1,0,np.nan], inplace=True)
     
     # Select only judgements from trusted contributors
-    df = df[['tweet_id', 'annotation', 'text']].loc[df['trust'] > 0.8]
+    df = df[['tweet_id', 'annotation', 'text', 'screen_name']].loc[df['trust'] > 0.8]
 
     # Aggregate to one judgement per tweet
     def f(x):
          return pd.Series({'annotation': x['annotation'].mean(),
                            'text': x['text'].iloc[0],
-                           'tweet_id': x['tweet_id'].iloc[0]})
+                           'tweet_id': x['tweet_id'].iloc[0],
+                           'screen_name': x['screen_name'].iloc[0]})
 
-    logging.info('Aggregating...')
-    df = df[['annotation', 'text', 'tweet_id']].groupby('tweet_id').apply(f)
-    df = df[['annotation', 'text']]
+    print('Aggregating...')
+    df = df[['annotation', 'text', 'tweet_id', 'screen_name']].groupby('tweet_id').apply(f)
+    df = df[['annotation', 'text', 'screen_name']]
     
     # Make annotations binary
     df.loc[df['annotation'] >= 0.5, 'annotation'] = 1
@@ -192,11 +532,21 @@ if __name__ == "__main__":
 
     df.reset_index(inplace=True)
 
-    logging.info('Loading nlp pipeline...')
+    print('Loading nlp pipeline...')
     parser = TextParser('de')
-    logging.info('Generating document term matrices...')
+    print('Generating document term matrices...')
     dtm_normalized = make_dtm(df.text, parser, normalize=True)
     dtm_non_normalized = make_dtm(df.text, parser, normalize=False)
+    dtm_hashtags = make_index(df.text, df.screen_name, parser, 'hashtags')
+    dtm_users = make_index(df.text, df.screen_name, parser, 'users')
+
+    # Ground truth distributions for users and hastags
+    gt_hashtags = dtm_hashtags[df['annotation'] == 1].sum(axis=0)
+    gt_hashtags /= gt_hashtags.sum()
+    gt_hashtags = gt_hashtags.values.reshape(1, -1)
+    gt_users = dtm_users[df['annotation'] == 1].sum(axis=0)
+    gt_users /= gt_users.sum()
+    gt_users = gt_users.values.reshape(1, -1)
 
     # Get the crowdflower words for the keywords
     reports = glob.glob('../data/cf_report*')
@@ -230,7 +580,7 @@ if __name__ == "__main__":
     # ==========================================================================
     
     ### Prepare data with keyword indicator variables
-    logging.info('Searching all keywords in tweets')
+    print('Searching all keywords in tweets')
     for k in kwords.word:
         df[k] = False
 
@@ -242,17 +592,19 @@ if __name__ == "__main__":
                 df.loc[index, k] = True
 
 
+    replications = 20
+    iterations = 50
     # =========================================================================
     # Get the baseline scores (random draws of increasing number of keywords)
     # =========================================================================
-    logging.info('Getting baseline scores...')
+    print('Getting baseline scores...')
 
-    n_words = 50
-    replications = 21
-    scores = []
-    
+    n_words = iterations
+    stats = {'replication': [], 'iteration': [], 'method': [], 'measure': [],
+             'value': []}
+
     for replication in range(replications):
-        logging.info(f'Replication {replication}')
+        print(f'Replication {replication}')
 
         # Draw initial keywords
         keywords, terms = draw_keywords(1, kwords[['word', 'weight']])
@@ -260,251 +612,68 @@ if __name__ == "__main__":
         for i in range(0, n_words):
             if i > 0:
                 new_word, terms = draw_keywords(1, terms)
-            keywords.extend(new_word)
+                keywords.extend(new_word)
             n = len(keywords)
 
             df['keyword_relevant'] = False
                
             column_idx = [list(df.columns).index(w) for w in keywords]
             df['keyword_relevant'] = df.iloc[:, column_idx].sum(axis=1) != 0
-            n_selected_kw = df.keyword_relevant.sum()
-
-            # Check if there are tweets from both classes
-            n_pos = df[df.keyword_relevant].annotation.sum()
-            if n_pos == 0:
-                metrics_kw = [0] * 3
-            else:
-                # Assess performance of keywords alone
-                metrics_kw = get_metrics(df.annotation, df.keyword_relevant)
+            selection = df[df['keyword_relevant']].index
+            res = evaluate_selection(selection)
             
-            out = metrics_kw + [n_selected_kw, n, replication]
-            scores.append(out)
+            for measure in res:
+                stats['replication'].append(replication)
+                stats['iteration'].append(i)
+                stats['method'].append('keyword')
+                stats['measure'].append(measure)
+                stats['value'].append(res[measure])
             
-    scores_df = pd.DataFrame(scores, columns=['kw_precision','kw_recall','kw_f1', 
-                                              'n_selected', 'n_keywords', 
-                                              'replication'])
-    scores_df.to_csv('../data/keyword_only_results.csv', index=False)
-
     # =========================================================================
     # Get the active learning scores
     # =========================================================================
 
-    iterations = 50
-    replications = 20
-    n_annotate_step = 5
-    scores = []
-    queries = []
-    negatives = []
-    selections = []
-    stored_kw_entries = []
+    #n_annotate_step = 5
+    #accepted_keywords = []
+    #if os.path.exists('used_keywords.p'):
+    #    accepted_keywords = pickle.load(open('used_keywords.p', 'rb'))
+    #
+    ### Replications
+    #results = []
+    #for replication in range(replications):
+    #    print(f'Replication: {replication}')
 
-    ## Everything we need for the classifiers
-    params = {'loss': ['log'],
-                  'penalty': ['elasticnet'],
-                  'alpha': np.linspace(0.00001, 0.001, 5), #regulariz. weight
-                  'l1_ratio': np.linspace(0,1,5)}          #balance l1 l2 norm
- 
-    #mod = SGDClassifier()
-    #clf = GridSearchCV(estimator=mod, param_grid=params, n_jobs=10)
-    clf = SGDClassifier(loss='log', penalty='elasticnet', l1_ratio=0.5)
+    #    # Reset everyting
+    #    df['keyword_relevant'] = False
+    #    df['clf_random_relevant'] = False
+    #    df['clf_active_relevant'] = False
+    #    df['annotated_active'] = False
+    #    df['annotated_random'] = False
 
-    valid_search_terms = set(dtm_non_normalized.columns)
-
-    if os.path.exists('full_sys_scores_backup.p'):
-        scores = pickle.load(open('full_sys_scores_backup.p', 'rb'))
-    if os.path.exists('selections.p'):
-        selections = pickle.load(open('selections.p', 'rb'))
-
-    start_replication = 0 
-    try:
-        last_iteration = scores[-1]
-        start_replication = last_iteration[6] + 1
-    except IndexError:
-        pass
-
-    ## Replications
-    for replication in range(start_replication, replications):
-
-        logging.info(f'Replication: {replication}')
-
-        # Reset everyting
-        df['keyword_relevant'] = False
-        df['clf_relevant'] = False
-        df['annotated'] = False
-        metrics_clf = [np.nan] * 3
-        metrics_kw = [np.nan] * 3
-
-        # Choose seed keyword
-        keywords, terms = draw_keywords(1, kwords[['word', 'weight']])
-
-        # Run first query expansion than active learning clf
-        to_annotate = None
-        iter_res = []
-        iter_selection = []
-
-        for iteration in range(iterations):
-            logging.info(f'Iteration {iteration}')
-            if iteration > 0:
-                # Expand query
-                keywords = keywords + new_keyword
-                logging.info(f'Querying with {keywords}')
-
-            # Query with the current keywords
-            keywords = [w for w in keywords if w in valid_search_terms]
-            if len(keywords) == 0:
-                logging.info('No valid seed keywords, adding seed word')
-                new_keyword, terms = draw_keywords(1, terms)
-                metrics_kw = [0] * 3
-                metrics_clf = [0] * 3
-                out = metrics_kw + metrics_clf + [replication, iteration, 0, 0] 
-                iter_res.append(out)
-                continue
-            
-            # Search for keywords in dtm
-            df['keyword_relevant'] = dtm_non_normalized[keywords].sum(axis=1) > 0
-
-            n_selected_kw = df.keyword_relevant.sum()
-            iter_selection.append([replication, iteration, df[df['keyword_relevant']].index])
-            logging.info(f"Query returned {n_selected_kw} tweets")
-
-            # Check if there are tweets from both classes
-            n_pos = df[df.keyword_relevant].annotation.sum()
-            #if n_pos == 0 or df[df.keyword_relevant].shape[0] < 30:
-            if n_pos == 0:
-                logging.info('No positive samples, adding seed word')
-                metrics_kw = [0] * 3
-                metrics_clf = [0] * 3
-                new_keyword, terms = draw_keywords(1, terms)
-                out = metrics_kw + metrics_clf + [replication, iteration, 
-                                                  n_selected_kw, 0] 
-                iter_res.append(out)
-                pickle.dump(scores, open('full_sys_scores_backup.p', 'wb'))
-                pickle.dump(selections, open('selections.p', 'wb'))
-                continue
-            else:
-                metrics_kw = get_metrics(df.annotation, df.keyword_relevant)
-         
-
-            # Annotate data (random draw) in first iteration
-            if to_annotate is None:
-                n_to_annotate = min(n_selected_kw, n_annotate_step)
-                to_annotate = np.random.choice(df[df.keyword_relevant].index, 
-                                               n_to_annotate, replace=False)
-                df.loc[to_annotate, 'annotated'] = True
-            
-            # Check if there are samples from both classes in annotated data
-            annot_sum = df.annotation.loc[df.annotated].sum()
-            n_samples = df.annotated.sum()
-            if annot_sum == n_samples or annot_sum < 2:
-                logging.info('Only one class of sample in annotated data, '
-                             'adding seed keyword')
-                logging.info(f'annot_sum: {annot_sum}')
-                new_keyword, terms = draw_keywords(1, terms)
-                to_annotate = None
-                metrics_clf = [0] * 3
-                out = metrics_kw + metrics_clf + [replication, iteration,
-                                                  n_selected_kw, 0] 
-                iter_res.append(out)
-                continue
-            else:
-                # Train the clf on annotated data
-
-                logging.info("Training clf...")
-                logging.info(f"Number of annotated samples: {n_samples}")
-                logging.info(f"Number of annotated positives: {annot_sum}")
-
-                annotated = df[df.annotated].index
-                try:
-                    clf.fit(dtm_normalized.loc[annotated].as_matrix(), 
-                            df.annotation.loc[df.annotated])
-                except Exception as e:
-                    logging.info("Error in training clf: {e}")
-                    metrics_clf = [0] * 3
-                    out = metrics_kw + metrics_clf + [replication, iteration,
-                                                      n_selected_kw, 0] 
-                    continue
- 
-                kw_rel_not_annot = df[df.keyword_relevant & ~df.annotated].index
-                kw_rel = df[df.keyword_relevant].index
-
-                # Make prediciton from clf for all data selected by query
-                n = len(kw_rel)
-                logging.info(f"Classifying all {n} queried samples")
-                pred = clf.predict(dtm_normalized.loc[kw_rel]).astype(bool)
-
-                df.loc[kw_rel, 'clf_relevant'] = pred
-                n_selected_clf = df.clf_relevant.sum()
-                
-                # Evaluate
-                metrics_clf = get_metrics(df.annotation, df.clf_relevant)
-                out = metrics_kw + metrics_clf + [replication, iteration, 
-                                                  n_selected_kw, n_selected_clf] 
-                iter_res.append(out)
-                logging.info(out[:6])
-
-                # Choose tweets for annotation in next round
-
-                ## Get predicted probabilities for queried but not annotated
-                # tweets
-                n = len(kw_rel_not_annot)
-                logging.info(f"Predicting probability for remaining {n} samples")
-                try:
-                    probs = clf.predict_proba(dtm_normalized.loc[kw_rel_not_annot])[:, 1]
-
-                    n_to_annotate = min(n_selected_kw, n_annotate_step)
-                    logging.info(f"Annotating {n_to_annotate} new samples")
-                    to_annotate = np.argsort((0.5 - probs)**2)[:n_to_annotate]
-                    df.loc[kw_rel_not_annot[to_annotate], 'annotated'] = True
-                except ValueError as e:
-                    logging.error(f"Error in prediction: {e}")
-               
-
-                # Select new query terms
-                ## Train new clf
-                word_scores, _ = fighting_words(df, dtm_non_normalized)
-                word_scores.sort_values(ascending=False, inplace=True)
-                prop = word_scores[~word_scores.index.isin(keywords)].iloc[:50]
-                # First check if there is a word that has been chosen in
-                # previous iterations. If so choose that:
-                new_keyword = None
-                for w in prop.index:
-                    if w in stored_kw_entries:
-                        new_keyword = [w]
-                if new_keyword is None:
-                    print(prop)
-                    while True:
-                        inp = input(f"Type new word: ")
-                        stored_kw_entries.append(inp)
-                        if inp in keywords:
-                            print('Already in keywords')
-                            continue
-                        else:
-                            new_keyword = [inp]
-                            break
-                    continue
-
-                logging.info(f'New keyword: {new_keyword}')
-
-        scores.extend(iter_res)
-        selections.extend(iter_selection)
-        queries.append(keywords)
-
-        # store backup
-        pickle.dump(scores, open('full_sys_scores_backup.p', 'wb'))
-        pickle.dump(selections, open('selections.p', 'wb'))
-        pickle.dump(queries, open('queries.p', 'wb'))
-        pickle.dump(stored_kw_entries, open('used_keywords.p', 'wb'))
-
+    #    results.append(replication_2_step(df, iterations,
+    #                                      kwords, dtm_non_normalized, 
+    #                                      dtm_normalized, n_annotate_step))
+    #    # Back up results
+    #    pickle.dump(results, open('results_backup.p', 'wb'))
     
-    
-    with open('../data/full_system_scores_2.csv', 'w') as outfile:
-        writer = csv.writer(outfile, delimiter=',')
-        writer.writerow(['precision_kw','recall_kw','f1_kw', 'precision_clf', 
-                         'recall_clf','f1_clf','replication', 'iteration',
-                         'n_selected_kw', 'n_selected_clf'])
-        for s in scores:
-            writer.writerow(s)
+    #pickle.dump(accepted_keywords, open('used_keywords.p', 'wb'))
+    ## Analyze the results
+    for r, iterations in enumerate(results):
+        print(r)
+        for i, iteration in enumerate(iterations):
+            for method in ['search', 'clf_random', 'clf_active']:
+                selection = iteration[f'selected_{method}']
+                this_stats = evaluate_selection(selection)
+                for measure in ['precision', 'recall', 'f1',
+                                'hashtag_similarity', 'user_similarity']:
+                    stats['replication'].append(r)
+                    stats['iteration'].append(i)
+                    stats['method'].append(method)
+                    stats['measure'].append(measure)
+                    stats['value'].append(this_stats[measure])
 
+    output = pd.DataFrame(stats) 
+    output.to_csv('../data/experiment_results.csv', index=False)
 
     # Analyze the queries
 
@@ -518,22 +687,20 @@ if __name__ == "__main__":
 
     # Normalize expansion and query terms
     for term in qe_terms:
-        qe_terms[term] = round(qe_terms[term] / total_expansion, 3)
+        qe_terms[term] = round(qe_terms[term] / total_expansion, 4)
 
     for term in survey_keywords:
-        survey_keywords[term] = round(survey_keywords[term] / kwords['count'].sum(), 3)
+        survey_keywords[term] = round(survey_keywords[term] / kwords['count'].sum(), 4)
 
     expansion_terms = sorted(qe_terms.items(), key=lambda x: x[1],
                              reverse=True)
     survey_terms = sorted(survey_keywords.items(), key=lambda x: x[1],
                           reverse=True)
     
-    # Write top 10 to csv
-    with open('../data/survey_expansion_terms.csv', 'w') as outfile:
-        writer = csv.writer(outfile, delimiter=',')
-        writer.writerow(['rank', 'survey_term', 'proportion', 'expansion_term',
-                         'proportion'])
-        for st, et, i in zip(survey_terms, expansion_terms, range(0, 10)):
-            writer.writerow([i+1, st[0], st[1], et[0], et[1]])
-
-
+    # Write top n to table
+    n = 20
+    ts = pd.DataFrame({'expansion_term': [x[0] for x in expansion_terms[:n]],
+                       'expansion_proportion': [x[1] for x in expansion_terms[:n]],
+                       'survey_term': [x[0] for x in survey_terms[:n]],
+                       'survey_proportion_': [x[1] for x in survey_terms[:n]]})
+    ts.to_latex('../paper/tables/top_terms.tex')

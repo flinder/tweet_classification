@@ -2,4 +2,4 @@ __pycache__/
 *.pkl
 data/
 *.swp
-
+*.p
