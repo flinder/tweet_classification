@@ -19,8 +19,10 @@ from gensim import corpora, matutils
 from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import f1_score, precision_score, recall_score, precision_recall_fscore_support
+from sklearn.metrics import (f1_score, precision_score, recall_score,
+                             precision_recall_fscore_support, make_scorer)
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.utils import shuffle
 from multiprocessing import Pool
 from scipy.special import gamma as G
@@ -116,9 +118,6 @@ def make_index(documents, users, parser, mode):
                         columns=[x[1] for x in vocabulary.items()])
 
     return dtm
-
-      
-
 
 def clean(word, parser):
     w = word.lstrip()
@@ -637,6 +636,8 @@ if __name__ == "__main__":
     #accepted_keywords = []
     #if os.path.exists('used_keywords.p'):
     #    accepted_keywords = pickle.load(open('used_keywords.p', 'rb'))
+    if os.path.exists('results_backup.p'):
+        results = pickle.load(open('results_backup.p', 'rb'))
     #
     ### Replications
     #results = []
@@ -674,7 +675,7 @@ if __name__ == "__main__":
 
     output = pd.DataFrame(stats) 
     output.to_csv('../data/experiment_results.csv', index=False)
-
+    sys.exit()
     # Analyze the queries
 
     ## Count them
@@ -704,3 +705,45 @@ if __name__ == "__main__":
                        'survey_term': [x[0] for x in survey_terms[:n]],
                        'survey_proportion_': [x[1] for x in survey_terms[:n]]})
     ts.to_latex('../paper/tables/top_terms.tex')
+
+
+
+
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    # Boolean vs clf experiment
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+    # Train the oracle model
+    mod = SGDClassifier()
+    params = {'loss': ['log', 'hinge'], 'penalty': ['elasticnet'], 
+              'l1_ratio': np.linspace(0,1,5)}
+    scorer = make_scorer(f1_score)
+    clf = GridSearchCV(mod, params, n_jobs=10, scoring=scorer)
+    X_train, X_test, y_train, y_test = train_test_split(
+            dtm_normalized.as_matrix(), df['annotation'].as_matrix()) 
+
+    clf.fit(X_train, y_train)
+    pred = clf.predict(X_test)
+    get_metrics(y_test, pred)
+
+    coefs = clf.best_estimator_.coef_
+    largest_coefs = np.argsort(coefs[0])[-200:]
+    best_features = dtm_normalized.columns[largest_coefs]
+    probs = coefs[0, largest_coefs] / coefs[0, largest_coefs].sum()
+    
+    output = {'replication': [], 'iteration': [], 'measure': [], 'value': []}
+    for replication in range(50):
+        print(replication)
+        for iteration in range(1, 201):
+
+            words = np.random.choice(best_features, iteration, p=probs)
+            prediction = dtm_normalized[words].sum(axis=1) > 0
+            scores = get_metrics(df['annotation'], prediction)
+            for i, measure in enumerate(['precision', 'recall', 'f1']):
+                output['replication'].append(replication)
+                output['iteration'].append(iteration)
+                output['measure'].append(measure)
+                output['value'].append(scores[i])
+
+    pd.DataFrame(output).to_csv('../data/boolean_vs_clf.csv', index=False)
