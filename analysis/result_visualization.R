@@ -99,4 +99,5 @@ ggplot(filter(df, measure == 'f1')) +
     geom_text(aes(x = 10, y = 0.65), label = "Classifier Score", color="grey40") +
     plot_theme
  ggsave(filename = '../paper/figures/bool_vs_clf.png', width = p_width, 
-       height = p_width, dpi = 300)
+       height = p_width, dpi = 301)
+ 
