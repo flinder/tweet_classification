@@ -731,14 +731,20 @@ if __name__ == "__main__":
     largest_coefs = np.argsort(coefs[0])[-200:]
     best_features = dtm_normalized.columns[largest_coefs]
     probs = coefs[0, largest_coefs] / coefs[0, largest_coefs].sum()
+    words = pd.DataFrame({'word': best_features, 'weight': probs})
     
     output = {'replication': [], 'iteration': [], 'measure': [], 'value': []}
     for replication in range(50):
         print(replication)
+        keywords, seed_keywords = draw_keywords(1, words[['word', 'weight']])
         for iteration in range(1, 201):
+            if iteration > 1:
+                next_keyword, seed_keywords = draw_keywords(
+                        1, seed_keywords[['word', 'weight']]
+                        )
+            keywords.extend(next_keyword)
 
-            words = np.random.choice(best_features, iteration, p=probs)
-            prediction = dtm_normalized[words].sum(axis=1) > 0
+            prediction = dtm_normalized[keywords].sum(axis=1) > 0
             scores = get_metrics(df['annotation'], prediction)
             for i, measure in enumerate(['precision', 'recall', 'f1']):
                 output['replication'].append(replication)
