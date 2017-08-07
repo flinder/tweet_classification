@@ -15,12 +15,13 @@ print(tab, file = '../paper/tables/cf_keywords.tex', include.rownames = FALSE)
 
 
 # Full experiment results
-df <- read_csv('../data/experiment_results.csv')
-
+df <- read_csv('../data/experiment_results.csv') %>%
+    filter(method != "clf_random")
+ 
 # Relabel
 df$method[df$method == "keyword"] <- "Keyword"
 df$method[df$method == "search"] <- "Expansion"
-df$method[df$method == "clf_random"] <- "Expansion + Random ML"
+#df$method[df$method == "clf_random"] <- "Expansion + Random ML"
 df$method[df$method == "clf_active"] <- "Expansion + Active ML"
 
 ggplot(filter(df, is.element(measure, c('precision', 'recall', 'f1'))), 
@@ -58,7 +59,7 @@ ggsave(filename = '../presentation/figures/evaluation_similarity.png', width = p
 ggplot(df, aes(x = iteration, y = value, color = method)) +
     geom_line(aes(group = replication), alpha = 0.6, size = 0.2, position = "jitter") +
     geom_smooth() +
-    facet_wrap(~ method + measure) +
+    facet_wrap(~ method + measure, nrow = 3) +
     ylab("") + xlab("# Keywords") +
     guides(color=FALSE) +
     scale_color_manual(values = cbPalette[-1]) +
@@ -68,6 +69,8 @@ ggplot(df, aes(x = iteration, y = value, color = method)) +
     plot_theme
 ggsave(filename = '../paper/figures/evaluation_detail.png', width = p_width, 
        height = p_width, dpi = 300)
+ggsave(filename = '../presentation/figures/evaluation_detail.png', width = p_width, 
+       height = p_width, dpi = 150)
 
 
 # Some stats for the discussion
