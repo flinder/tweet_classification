@@ -85,37 +85,22 @@ stats <-
     print()
 
 
+# Boolean vs ML
 
+df <- read_csv('../data/boolean_vs_clf.csv') 
+df$benchmark <- 0
+df$benchmark[df$measure == "precision"] <- 0.81
+df$benchmark[df$measure == "recall"] <- 0.5
+df$benchmark[df$measure == "f1"] <- 0.62
 
-######################################################################
-keyword <- read_csv('../data/keyword_only_results.csv') %>%
-    #filter(n_keywords > 4 & n_keywords < 300) %>%
-    mutate(keyword_precision = kw_precision,
-           keyword_recall = kw_recall,
-           keyword_f1 = kw_f1) %>%
-    select(keyword_precision, keyword_recall, keyword_f1, n_keywords, replication) %>%
-    melt(id.vars = c("n_keywords", "replication")) %>% 
-    tbl_df() %>%
-    mutate(measure = sapply(variable, 
-                            function(x) unlist(strsplit(as.character(x), '_'))[2]),
-           variable = sapply(variable, 
-                             function(x) unlist(strsplit(as.character(x), '_'))[1]))
-
-expansion <- read_csv('../data/full_system_scores_2.csv')  %>%
-    mutate(n_keywords = iteration+1,
-           expansion_precision = precision_kw,
-           expansion_recall = recall_kw,
-           expansion_f1 = f1_kw,
-           full_precision = precision_clf,
-           full_recall = recall_clf,
-           full_f1 = f1_clf) %>%
-    select(expansion_precision, expansion_recall, expansion_f1, full_precision, 
-           full_recall, full_f1, n_keywords, replication) %>%
-    melt(id.vars = c("n_keywords", "replication")) %>% 
-    tbl_df() %>%
-    mutate(measure = sapply(variable, 
-                            function(x) unlist(strsplit(as.character(x), '_'))[2]),
-           variable = sapply(variable, 
-                             function(x) unlist(strsplit(as.character(x), '_'))[1]))
-
-df <- rbind(keyword, expansion)
+ggplot(filter(df, measure == 'f1')) + 
+    geom_point(aes(x = iteration, y = value, group = replication), 
+               size = 0.5, alpha = 0.3) +
+    geom_smooth(aes(x = iteration, y = value)) +
+    geom_hline(aes(yintercept = benchmark), linetype = 2) +
+    ylim(0,1) + ylab("F1 Score") + xlab("Number of Keywords") +
+    geom_text(aes(x = 10, y = 0.65), label = "Classifier Score", color="grey40") +
+    plot_theme
+ ggsave(filename = '../paper/figures/bool_vs_clf.png', width = p_width, 
+       height = p_width, dpi = 301)
+ 
