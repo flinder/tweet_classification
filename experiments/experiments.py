@@ -707,8 +707,6 @@ if __name__ == "__main__":
     ts.to_latex('../paper/tables/top_terms.tex')
 
 
-
-
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # Boolean vs clf experiment
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -743,7 +741,6 @@ if __name__ == "__main__":
                         1, seed_keywords[['word', 'weight']]
                         )
             keywords.extend(next_keyword)
-
             prediction = dtm_normalized[keywords].sum(axis=1) > 0
             scores = get_metrics(df['annotation'], prediction)
             for i, measure in enumerate(['precision', 'recall', 'f1']):
