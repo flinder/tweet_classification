@@ -22,7 +22,7 @@ df <- read_csv('../data/experiment_results.csv') %>%
 df$method[df$method == "keyword"] <- "Keyword"
 df$method[df$method == "search"] <- "Expansion"
 #df$method[df$method == "clf_random"] <- "Expansion + Random ML"
-df$method[df$method == "clf_active"] <- "Expansion + Active ML"
+df$method[df$method == "clf_active"] <- "Expansion + ML"
 
 ggplot(filter(df, is.element(measure, c('precision', 'recall', 'f1'))), 
               aes(x = iteration, y = value, color = method, linetype = method)) +
@@ -40,7 +40,8 @@ ggsave(filename = '../presentation/figures/evaluation_prec_rec.png', width = p_w
        height = 0.5 * p_width, dpi = 300)
 
 
-ggplot(filter(df, !is.element(measure, c('precision', 'recall', 'f1'))), 
+ggplot(filter(df, !is.element(measure, c('precision', 'recall', 'f1')),
+              iteration < 50), 
               aes(x = iteration, y = value, color = method, linetype = method)) +
     #geom_point(alpha = 0.6, isze = 0.2, position = "jitter") +
     geom_smooth() +
@@ -89,18 +90,20 @@ stats <-
 
 df <- read_csv('../data/boolean_vs_clf.csv') 
 df$benchmark <- 0
-df$benchmark[df$measure == "precision"] <- 0.81
-df$benchmark[df$measure == "recall"] <- 0.5
-df$benchmark[df$measure == "f1"] <- 0.62
+df$benchmark[df$measure == "precision"] <- 0.84
+df$benchmark[df$measure == "recall"] <- 0.52
+df$benchmark[df$measure == "f1"] <- 0.65
 
-ggplot(filter(df, measure == 'f1')) + 
-    geom_point(aes(x = iteration, y = value, group = replication), 
-               size = 0.5, alpha = 0.3) +
-    geom_smooth(aes(x = iteration, y = value)) +
+ggplot(df, aes(x = iteration, y = value)) + 
+    geom_line(aes(group = replication), 
+               size = 0.4, alpha = 0.2) +
+    geom_smooth() +
     geom_hline(aes(yintercept = benchmark), linetype = 2) +
     ylim(0,1) + ylab("F1 Score") + xlab("Number of Keywords") +
-    geom_text(aes(x = 10, y = 0.65), label = "Classifier Score", color="grey40") +
+    facet_wrap(~ measure) +
+    scale_color_manual(values = cbPalette[-1]) +
+    #geom_text(aes(x = 10, y = 0.65), label = "Classifier Score", color="grey40") +
     plot_theme
  ggsave(filename = '../paper/figures/bool_vs_clf.png', width = p_width, 
-       height = p_width, dpi = 301)
+       height = 0.5*p_width, dpi = 150)
  
