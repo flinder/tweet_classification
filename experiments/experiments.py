@@ -11,13 +11,12 @@ import os
 import glob 
 import operator
 import time
+import datetime
 
 import pandas as pd
 import numpy as np
 
 from gensim import corpora, matutils
-from sklearn.linear_model import SGDClassifier
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import (f1_score, precision_score, recall_score,
                              precision_recall_fscore_support, make_scorer)
@@ -26,6 +25,10 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.utils import shuffle
 from multiprocessing import Pool
 from scipy.special import gamma as G
+from sklearn.ensemble import (ExtraTreesClassifier, RandomForestClassifier, 
+                              AdaBoostClassifier, GradientBoostingClassifier)
+from sklearn.svm import SVC
+from sklearn.linear_model import SGDClassifier
 
 
 sys.path.append('../../dissdat/database/')
@@ -234,8 +237,8 @@ def replication_2_step(df, n_iterations, seed_keywords,
     valid_search_terms = set(dtm_search.columns)
     params = {'loss': ['log'],
                   'penalty': ['elasticnet'],
-                  'alpha': np.linspace(0.00001, 0.001, 5), #regulariz. weight
-                  'l1_ratio': np.linspace(0,1,5)}          #balance l1 l2 norm
+                  'alpha': [0.00001, 0.001], #regulariz. weight
+                  'l1_ratio': [0,1]}          #balance l1 l2 norm
  
     mod = SGDClassifier()
     clf_active = GridSearchCV(estimator=mod, param_grid=params, n_jobs=10)
@@ -396,13 +399,16 @@ def replication_2_step(df, n_iterations, seed_keywords,
                     word_scores, _ = fighting_words(df, dtm_search)
                     word_scores.sort_values(ascending=False, inplace=True)
                     prop = word_scores[~word_scores.index.isin(keywords)].iloc[:50]
+                    next_keyword = None
                     # First check if there is a word that has been chosen in
                     # previous iterations. If so choose that:
-                    next_keyword = None
                     for w in prop.index:
                         if w in accepted_keywords:
                             next_keyword = [w]
                     #if next_keyword is None:
+                    #    #for w in prop.index:
+                    #    #    if w not in accepted_keywords:
+                    #    #        print(w)
                     #    print(prop)
                     #    while True:
                     #        inp = input(f"Type new word: ")
@@ -459,27 +465,43 @@ def evaluate_selection(selection):
         f1 = f1_score(y_true, y_pred)
         prec = precision_score(y_true, y_pred)
         rec = recall_score(y_true, y_pred)
-        # Difference in distributions for hashtags and users
-        ht = (dtm_hashtags
-              .loc[selection]
-              .sum(axis=0)
-              .values
-              .reshape(1, -1))
+        # Difference in distributions for hashtags , users and timeline
+        ht = (dtm_hashtags.loc[selection]
+                          .sum(axis=0)
+                          .values
+                          .reshape(1, -1))
         ht_diff = cosine_similarity(ht, gt_hashtags)[0][0]
-        us = (dtm_users
-              .loc[selection]
-              .sum(axis=0)
-              .values
-              .reshape(1, -1))
+        us = (dtm_users.loc[selection]
+                       .sum(axis=0)
+                       .values
+                       .reshape(1, -1))
         us_diff = cosine_similarity(us, gt_users)[0][0]
+        selected_times = pd.DataFrame(df['created_at'].loc[selection])
+        selected_per_day = (selected_times
+                            .groupby(selected_times.created_at.dt.dayofyear)
+                            .count())
+        selected_per_day['count'] = selected_per_day['created_at']
+        selected_per_day['date'] = selected_per_day.index.astype(int)
+        selected_per_day['date'] = pd.DatetimeIndex(
+                [datetime.datetime(2015, 1, 1) 
+                 + datetime.timedelta(days=int(x-1)) for
+                 x in selected_per_day['date']])
+        every_day = pd.DataFrame({'date': pd.date_range(start='1-1-2015', 
+                                                        end='12-31-2015')})
+        tl = (every_day.merge(selected_per_day[['count', 'date']], how='left')
+                       .fillna(0))
+        tl = np.array(tl['count']).reshape(1, -1)
+        tl_diff = cosine_similarity(tl, gt_timeline)[0][0]
     else:
         f1 = 0
         prec = 0
         rec = 0
         us_diff = 0
         ht_diff = 0
+        tl_diff = 0
     return {'precision': prec, 'recall': rec, 'f1': f1,
             'user_similarity': us_diff, 'hashtag_similarity': ht_diff, 
+            'timeline_similarity': tl_diff
             }
 
 def expand_vector(sparse_vector, length):
@@ -488,6 +510,46 @@ def expand_vector(sparse_vector, length):
     return out
 
 
+class EstimatorSelectionHelper:
+    def __init__(self, models, params):
+        if not set(models.keys()).issubset(set(params.keys())):
+            missing_params = list(set(models.keys()) - set(params.keys()))
+            raise ValueError("Some estimators are missing parameters: %s" % missing_params)
+        self.models = models
+        self.params = params
+        self.keys = models.keys()
+        self.grid_searches = {}
+    
+    def fit(self, X, y, cv=10, n_jobs=1, verbose=1, scoring=None, refit=False):
+        for key in self.keys:
+            print("Running GridSearchCV for %s." % key)
+            model = self.models[key]
+            params = self.params[key]
+            gs = GridSearchCV(model, params, cv=cv, n_jobs=n_jobs, 
+                              verbose=verbose, scoring=scoring, refit=refit)
+            gs.fit(X,y)
+            self.grid_searches[key] = gs    
+    
+    def score_summary(self, sort_by='mean_score'):
+        def row(key, scores, params):
+            d = {
+                 'estimator': key,
+                 'min_score': min(scores),
+                 'max_score': max(scores),
+                 'mean_score': np.mean(scores),
+                 'std_score': np.std(scores),
+            }
+            return pd.Series({**params,**d})
+                      
+        rows = [row(k, gsc.cv_validation_scores, gsc.parameters) 
+                     for k in self.keys
+                     for gsc in self.grid_searches[k].grid_scores_]
+        df = pd.concat(rows, axis=1).T.sort([sort_by], ascending=False)
+        
+        columns = ['estimator', 'min_score', 'mean_score', 'max_score', 'std_score']
+        columns = columns + [c for c in df.columns if c not in columns]
+        
+        return df[columns]
 
 if __name__ == "__main__":
 
@@ -500,35 +562,47 @@ if __name__ == "__main__":
              '       cr_results.annotation,' 
              '       cr_results.trust,'
              '       tweets.text,'
+             '       tweets.created_at,'
              '       users.screen_name '
              'FROM cr_results '
              'INNER JOIN tweets ON tweets.id=cr_results.tweet_id '
              'INNER JOIN users ON users.id=tweets.user_id ')
-    
+
     print('Getting the data...')
     df = pd.read_sql(sql=query, con=engine)
     
+   
     df.replace(to_replace=['relevant', 'irrelevant', 'None'], 
                value=[1,0,np.nan], inplace=True)
     
     # Select only judgements from trusted contributors
-    df = df[['tweet_id', 'annotation', 'text', 'screen_name']].loc[df['trust'] > 0.8]
+    df = df[['tweet_id', 'annotation', 'text', 
+             'screen_name', 'created_at']].loc[df['trust'] > 0.8]
 
     # Aggregate to one judgement per tweet
     def f(x):
          return pd.Series({'annotation': x['annotation'].mean(),
                            'text': x['text'].iloc[0],
                            'tweet_id': x['tweet_id'].iloc[0],
-                           'screen_name': x['screen_name'].iloc[0]})
+                           'screen_name': x['screen_name'].iloc[0],
+                           'created_at': x['created_at'].iloc[0]})
 
     print('Aggregating...')
-    df = df[['annotation', 'text', 'tweet_id', 'screen_name']].groupby('tweet_id').apply(f)
-    df = df[['annotation', 'text', 'screen_name']]
+    # Convert tweet timestamp to utc (is in utc but has tz aware format)
+    df['created_at'] = pd.to_datetime(df['created_at'], utc=True)
+    df = df[['annotation', 'text', 'tweet_id', 
+             'screen_name', 'created_at']].groupby('tweet_id').apply(f)
+
+
+    df = df[['annotation', 'text', 'screen_name', 'created_at']]
     
     # Make annotations binary
     df.loc[df['annotation'] >= 0.5, 'annotation'] = 1
     df.loc[df['annotation'] < 0.5, 'annotation'] = 0
 
+    # For some reason a few tweets outside of the 2015 snuck in, remove them
+    df = df[df.created_at.dt.year == 2015]
+ 
     df.reset_index(inplace=True)
 
     print('Loading nlp pipeline...')
@@ -539,7 +613,7 @@ if __name__ == "__main__":
     dtm_hashtags = make_index(df.text, df.screen_name, parser, 'hashtags')
     dtm_users = make_index(df.text, df.screen_name, parser, 'users')
 
-    # Ground truth distributions for users and hastags
+    # ground truth distributions for users and hastags
     gt_hashtags = dtm_hashtags[df['annotation'] == 1].sum(axis=0)
     gt_hashtags /= gt_hashtags.sum()
     gt_hashtags = gt_hashtags.values.reshape(1, -1)
@@ -547,7 +621,11 @@ if __name__ == "__main__":
     gt_users /= gt_users.sum()
     gt_users = gt_users.values.reshape(1, -1)
 
-    # Get the crowdflower words for the keywords
+    gt_timeline = df['tweet_id'].groupby(df.created_at.dt.dayofyear).count()
+    gt_timeline /= gt_timeline.sum()
+    gt_timeline = gt_timeline.values.reshape(1, -1)
+
+    # get the crowdflower words for the keywords
     reports = glob.glob('../data/cf_report*')
     words = []
     for r in reports:
@@ -556,6 +634,7 @@ if __name__ == "__main__":
                 try:
                     w = line.strip('"\n').split(',"')[1]
                     ws = w.split(',')
+                    print(ws)
                     words.extend(ws)
                 except IndexError:
                     pass
@@ -565,23 +644,23 @@ if __name__ == "__main__":
     for w in clean_words:
         survey_keywords[w] = survey_keywords.get(w, 0) + 1
     
-    # Calculate weights
+    # calculate weights
     kwords = pd.DataFrame([[k,survey_keywords[k]] for k in survey_keywords],
                        columns=['word', 'count'])
     kwords['weight'] = kwords['count'] / kwords['count'].sum()
 
-    # Write to file for the table
+    # write to file for the table
     kwords.sort_values(by='count', ascending=False).to_csv(
             '../data/crowdflower_keywords.csv', index=False
             )
 
-    # Get the baseline scores (keywords additive in order)
+    # get the baseline scores (keywords additive in order)
     # ==========================================================================
     
-    ### Prepare data with keyword indicator variables
-    print('Searching all keywords in tweets')
+    ### prepare data with keyword indicator variables
+    print('searching all keywords in tweets')
     for k in kwords.word:
-        df[k] = False
+        df[k] = false
 
     for index, row in df.iterrows():
         text = row['text']
@@ -591,21 +670,21 @@ if __name__ == "__main__":
                 df.loc[index, k] = True
 
 
-    replications = 20
-    iterations = 50
+    replications = 100
+    iterations = 100
     # =========================================================================
-    # Get the baseline scores (random draws of increasing number of keywords)
+    # get the baseline scores (random draws of increasing number of keywords)
     # =========================================================================
-    print('Getting baseline scores...')
+    print('getting baseline scores...')
 
     n_words = iterations
     stats = {'replication': [], 'iteration': [], 'method': [], 'measure': [],
              'value': []}
 
     for replication in range(replications):
-        print(f'Replication {replication}')
+        print(f'replication {replication}')
 
-        # Draw initial keywords
+        # draw initial keywords
         keywords, terms = draw_keywords(1, kwords[['word', 'weight']])
 
         for i in range(0, n_words):
@@ -627,21 +706,24 @@ if __name__ == "__main__":
                 stats['method'].append('keyword')
                 stats['measure'].append(measure)
                 stats['value'].append(res[measure])
+
+    #pickle.dump(stats, open('stats_temp.p', 'wb'))
+    stats = pickle.load(open('stats_temp.p', 'rb'))
             
     # =========================================================================
-    # Get the active learning scores
+    # get the active learning scores
     # =========================================================================
 
-    #n_annotate_step = 5
+    n_annotate_step = 5
     #accepted_keywords = []
-    #if os.path.exists('used_keywords.p'):
-    #    accepted_keywords = pickle.load(open('used_keywords.p', 'rb'))
+    if os.path.exists('used_keywords.p'):
+        accepted_keywords = pickle.load(open('used_keywords.p', 'rb'))
     if os.path.exists('results_backup.p'):
         results = pickle.load(open('results_backup.p', 'rb'))
     #
     ### Replications
     #results = []
-    #for replication in range(replications):
+    #for replication in range(len(results), replications):
     #    print(f'Replication: {replication}')
 
     #    # Reset everyting
@@ -654,19 +736,19 @@ if __name__ == "__main__":
     #    results.append(replication_2_step(df, iterations,
     #                                      kwords, dtm_non_normalized, 
     #                                      dtm_normalized, n_annotate_step))
-    #    # Back up results
-    #    pickle.dump(results, open('results_backup.p', 'wb'))
-    
+    ## Back up results
+    #pickle.dump(results, open('results_backup.p', 'wb'))
     #pickle.dump(accepted_keywords, open('used_keywords.p', 'wb'))
-    ## Analyze the results
+
+    # Analyze the results
     for r, iterations in enumerate(results):
         print(r)
         for i, iteration in enumerate(iterations):
             for method in ['search', 'clf_random', 'clf_active']:
                 selection = iteration[f'selected_{method}']
                 this_stats = evaluate_selection(selection)
-                for measure in ['precision', 'recall', 'f1',
-                                'hashtag_similarity', 'user_similarity']:
+                for measure in ['precision', 'recall', 'f1', 'user_similarity',
+                                'timeline_similarity', 'hashtag_similarity']:
                     stats['replication'].append(r)
                     stats['iteration'].append(i)
                     stats['method'].append(method)
@@ -681,6 +763,7 @@ if __name__ == "__main__":
     ## Count them
     qe_terms = {}
     total_expansion = 0
+    queries = [r[99]['search_terms'] for r in results]
     for query in queries:
         for word in query:
             qe_terms[word] = qe_terms.get(word, 0) + 1
@@ -699,7 +782,7 @@ if __name__ == "__main__":
                           reverse=True)
     
     # Write top n to table
-    n = 20
+    n = 293
     ts = pd.DataFrame({'expansion_term': [x[0] for x in expansion_terms[:n]],
                        'expansion_proportion': [x[1] for x in expansion_terms[:n]],
                        'survey_term': [x[0] for x in survey_terms[:n]],
@@ -711,17 +794,42 @@ if __name__ == "__main__":
     # Boolean vs clf experiment
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+    models = { 
+	#'ExtraTreesClassifier': ExtraTreesClassifier(),
+	#'RandomForestClassifier': RandomForestClassifier(),
+	#'AdaBoostClassifier': AdaBoostClassifier(),
+	#'GradientBoostingClassifier': GradientBoostingClassifier(),
+	#'SVC': SVC(),
+        'SGD': SGDClassifier()	
+    }
 
-    # Train the oracle model
-    mod = SGDClassifier()
-    params = {'loss': ['log', 'hinge'], 'penalty': ['elasticnet'], 
-              'l1_ratio': np.linspace(0,1,5)}
+    params = { 
+	#'ExtraTreesClassifier': { 'n_estimators': [10, 50, 100] },
+	#'RandomForestClassifier': { 'n_estimators': [10, 50, 100] },
+	#'AdaBoostClassifier':  { 'n_estimators': [10, 50, 100] },
+	#'GradientBoostingClassifier': { 'n_estimators': [10, 50, 100], 
+        #                                'learning_rate': [0.8, 1.0] },
+	#'SVC': [
+	#    {'kernel': ['linear'], 'C': [1, 10]},
+	#    {'kernel': ['rbf'], 'C': [1, 10], 'gamma': [0.001, 0.0001]},
+	#],
+        'SGD': {'loss': ['log', 'hinge', 'modified_huber'], 
+                'penalty': ['elasticnet'], 
+                'alpha': np.linspace(0.00001,0.001, 5),
+                'learning_rate': ['constant', 'optimal', 'invscaling'],
+                'eta0': [0.1,0.5,1],
+                'l1_ratio': np.linspace(0,1,5)}
+
+    }
+    
+    helper = EstimatorSelectionHelper(models, params)
     scorer = make_scorer(f1_score)
-    clf = GridSearchCV(mod, params, n_jobs=10, scoring=scorer)
     X_train, X_test, y_train, y_test = train_test_split(
             dtm_normalized.as_matrix(), df['annotation'].as_matrix()) 
+    helper.fit(X_train, y_train, scoring=scorer, n_jobs=12)
 
-    clf.fit(X_train, y_train)
+
+
     pred = clf.predict(X_test)
     get_metrics(y_test, pred)
 
