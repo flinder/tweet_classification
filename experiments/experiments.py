@@ -620,10 +620,21 @@ if __name__ == "__main__":
     gt_users = dtm_users[df['annotation'] == 1].sum(axis=0)
     gt_users /= gt_users.sum()
     gt_users = gt_users.values.reshape(1, -1)
+    
 
-    gt_timeline = df['tweet_id'].groupby(df.created_at.dt.dayofyear).count()
+    times = pd.DataFrame(df['created_at'][df['annotation'] == 1])
+    per_day = (times.groupby(times.created_at.dt.dayofyear).count())
+    per_day['count'] = per_day['created_at']
+    per_day['date'] = per_day.index.astype(int)
+    per_day['date'] = pd.DatetimeIndex([datetime.datetime(2015, 1, 1) 
+                                        + datetime.timedelta(days=int(x-1)) for
+                                        x in per_day['date']])
+    every_day = pd.DataFrame({'date': pd.date_range(start='1-1-2015', 
+                                                    end='12-31-2015')})
+    tl = (every_day.merge(per_day[['count', 'date']], how='left')
+                       .fillna(0))
+    gt_timeline = np.array(tl['count']).reshape(1, -1)
     gt_timeline /= gt_timeline.sum()
-    gt_timeline = gt_timeline.values.reshape(1, -1)
 
     # get the crowdflower words for the keywords
     reports = glob.glob('../data/cf_report*')
@@ -660,7 +671,7 @@ if __name__ == "__main__":
     ### prepare data with keyword indicator variables
     print('searching all keywords in tweets')
     for k in kwords.word:
-        df[k] = false
+        df[k] = False
 
     for index, row in df.iterrows():
         text = row['text']
@@ -707,8 +718,8 @@ if __name__ == "__main__":
                 stats['measure'].append(measure)
                 stats['value'].append(res[measure])
 
-    #pickle.dump(stats, open('stats_temp.p', 'wb'))
-    stats = pickle.load(open('stats_temp.p', 'rb'))
+    pickle.dump(stats, open('stats_temp.p', 'wb'))
+    #stats = pickle.load(open('stats_temp.p', 'rb'))
             
     # =========================================================================
     # get the active learning scores

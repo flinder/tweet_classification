@@ -39,7 +39,7 @@ ggsave(filename = '../paper/figures/evaluation_prec_rec.png', width = p_width,
 ggsave(filename = '../presentation/figures/evaluation_prec_rec.png', width = p_width, 
        height = 0.5 * p_width, dpi = 300)
 
-ggplot(filter(df, !is.element(measure, c('precision', 'recall', 'f1', 'timeline_similarity'))), 
+ggplot(filter(df, !is.element(measure, c('precision', 'recall', 'f1'))), 
               aes(x = iteration, y = value, color = method, linetype = method)) +
     #geom_point(alpha = 0.6, isze = 0.2, position = "jitter") +
     geom_smooth() +
