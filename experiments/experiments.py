@@ -736,11 +736,13 @@ if __name__ == "__main__":
         print(replication)
         keywords, seed_keywords = draw_keywords(1, words[['word', 'weight']])
         for iteration in range(1, 201):
+
             if iteration > 1:
                 next_keyword, seed_keywords = draw_keywords(
                         1, seed_keywords[['word', 'weight']]
                         )
-            keywords.extend(next_keyword)
+                keywords.extend(next_keyword)
+
             prediction = dtm_normalized[keywords].sum(axis=1) > 0
             scores = get_metrics(df['annotation'], prediction)
             for i, measure in enumerate(['precision', 'recall', 'f1']):

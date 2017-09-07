@@ -15,14 +15,14 @@ print(tab, file = '../paper/tables/cf_keywords.tex', include.rownames = FALSE)
 
 
 # Full experiment results
-df <- read_csv('../data/experiment_results.csv') %>%
-    filter(method != "clf_random")
+df <- read_csv('../data/experiment_results.csv')
  
 # Relabel
 df$method[df$method == "keyword"] <- "Keyword"
 df$method[df$method == "search"] <- "Expansion"
-#df$method[df$method == "clf_random"] <- "Expansion + Random ML"
 df$method[df$method == "clf_active"] <- "Expansion + ML"
+df$method[df$method == "clf_random"] <- "Expansion + Random ML"
+df <- filter(df, replication <= 16)
 
 ggplot(filter(df, is.element(measure, c('precision', 'recall', 'f1'))), 
               aes(x = iteration, y = value, color = method, linetype = method)) +
@@ -31,7 +31,7 @@ ggplot(filter(df, is.element(measure, c('precision', 'recall', 'f1'))),
     facet_wrap(~ measure) +
     ylab("") + xlab("# Keywords") +
     guides(color=guide_legend(title=""), linetype=guide_legend(title="")) +
-    scale_color_manual(values = cbPalette[-1]) +
+    scale_color_manual(values = cbPalette) +
     ylim(0,1) +
     plot_theme
 ggsave(filename = '../paper/figures/evaluation_prec_rec.png', width = p_width, 
@@ -40,15 +40,14 @@ ggsave(filename = '../presentation/figures/evaluation_prec_rec.png', width = p_w
        height = 0.5 * p_width, dpi = 300)
 
 
-ggplot(filter(df, !is.element(measure, c('precision', 'recall', 'f1')),
-              iteration < 50), 
+ggplot(filter(df, !is.element(measure, c('precision', 'recall', 'f1', 'timeline_similarity'))), 
               aes(x = iteration, y = value, color = method, linetype = method)) +
     #geom_point(alpha = 0.6, isze = 0.2, position = "jitter") +
     geom_smooth() +
     facet_wrap(~ measure) +
     ylab("") + xlab("# Keywords") +
     guides(color=guide_legend(title=""), linetype=guide_legend(title="")) +
-    scale_color_manual(values = cbPalette[-1]) +
+    scale_color_manual(values = cbPalette) +
     ylim(0,1) +
     plot_theme
 ggsave(filename = '../paper/figures/evaluation_similarity.png', width = p_width, 
@@ -57,32 +56,36 @@ ggsave(filename = '../presentation/figures/evaluation_similarity.png', width = p
        height = 0.5 * p_width, dpi = 300)
 
 
-ggplot(df, aes(x = iteration, y = value, color = method)) +
+ggplot(filter(df, !is.element(measure, c('timeline_similarity'))), 
+              aes(x = iteration, y = value, color = method)) +
     geom_line(aes(group = replication), alpha = 0.6, size = 0.2, position = "jitter") +
     geom_smooth() +
-    facet_wrap(~ method + measure, nrow = 3) +
+    facet_wrap(~ method + measure, nrow = 4) +
     ylab("") + xlab("# Keywords") +
     guides(color=FALSE) +
-    scale_color_manual(values = cbPalette[-1]) +
+    scale_color_manual(values = cbPalette) +
     ylim(0,1) +
     scale_y_continuous(breaks=c(0, 0.5, 1)) +
     theme(strip.text = element_text(size=2)) +
     plot_theme
 ggsave(filename = '../paper/figures/evaluation_detail.png', width = p_width, 
-       height = p_width, dpi = 300)
+       height = p_width, dpi = 150)
 ggsave(filename = '../presentation/figures/evaluation_detail.png', width = p_width, 
        height = p_width, dpi = 150)
 
 
 # Some stats for the discussion
 stats <- 
-    group_by(df, variable, measure) %>%
+    group_by(filter(df, measure == "hashtag_similarity", 
+                    (iteration == 0 | iteration == 99)), 
+              measure, iteration) %>%
     summarize(min = min(value),
               lo = quantile(value, 0.025),
               avg = mean(value), 
               median = median(value),
               hi = quantile(value, 0.975),
               max = max(value)) %>%
+    as.data.frame() %>%
     print()
 
 
