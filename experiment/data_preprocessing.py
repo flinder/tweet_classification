@@ -17,6 +17,22 @@ from gensim import matutils
 sys.path.append('../../dissdat/database/')
 from db import make_session
 
+def clean(word, tokenize):
+    '''
+    Process survey responses to produces separate keywords. tokenize, lowercase, 
+    stem.
+    '''
+    tokens = tokenize(word)
+    tokens = [t.orth_.lower() for t in tokens] 
+    if len(tokens) != 1:
+        return None
+    w = tokens[0]
+    if w in  ['', ' ']:
+        return None
+    if len(w) > 60:
+        return None
+    return w
+
 
 class TextProcessor(object):
     '''
@@ -211,7 +227,7 @@ if __name__ == "__main__":
     gt_timeline = np.array(tl['count']).reshape(1, -1)
 
     # Crowdflower survey
-    reports = glob.glob('../data/cf_report*')
+    reports = glob.glob('../data/survey_data/cf_report*')
     words = []
     for r in reports:
         with open(r, 'r') as infile:
@@ -219,12 +235,12 @@ if __name__ == "__main__":
                 try:
                     w = line.strip('"\n').split(',"')[1]
                     ws = w.split(',')
-                    print(ws)
                     words.extend(ws)
                 except IndexError:
                     pass
     
-    clean_words = [clean(w, parser) for w in words if clean(w, parser) is not None]
+    clean_words = [clean(w, parser.tokenize) for w in words 
+                   if clean(w, parser.tokenize) is not None]
     survey_keywords = {}
     for w in clean_words:
         survey_keywords[w] = survey_keywords.get(w, 0) + 1
