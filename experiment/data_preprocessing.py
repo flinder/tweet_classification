@@ -174,7 +174,7 @@ def clean(word, tokenize):
     stem.
     '''
     tokens = tokenize(word)
-    pattern = '[' + re.escape(string.punctuation) + '\s+' + ']'
+    pattern = '[^A-Za-z0-9ÄÖÜäöüß]'
     out = []
     for i,w in enumerate(tokens):
         if re.match(pattern, w.orth_) is not None or w.is_stop:
