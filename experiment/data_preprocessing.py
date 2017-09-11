@@ -10,29 +10,13 @@ import pickle
 import re
 import datetime
 import glob
+import string
 
 from gensim.corpora import Dictionary
 from gensim import matutils
 
 sys.path.append('../../dissdat/database/')
 from db import make_session
-
-def clean(word, tokenize):
-    '''
-    Process survey responses to produces separate keywords. tokenize, lowercase, 
-    stem.
-    '''
-    tokens = tokenize(word)
-    tokens = [t.orth_.lower() for t in tokens] 
-    if len(tokens) != 1:
-        return None
-    w = tokens[0]
-    if w in  ['', ' ']:
-        return None
-    if len(w) > 60:
-        return None
-    return w
-
 
 class TextProcessor(object):
     '''
@@ -44,6 +28,11 @@ class TextProcessor(object):
 
     def __init__(self, language):
         self.parser = spacy.load(language)
+        # Workaround to make stopwords work in German spacy 
+        # see (https://github.com/explosion/spaCy/issues/729)
+        for word in self.parser.Defaults.stop_words:
+            lex = self.parser.vocab[word]
+            lex.is_stop = True
         self.stem = Stemmer.Stemmer(language).stemWord 
         self.rm_chars = re.compile('[@/\\\\]')
         self.re_hashtag = re.compile(r'#[A-Za-zÄÖÜäöü0-9_]+')
@@ -179,6 +168,19 @@ def get_data():
 
     return df
 
+def clean(word, tokenize):
+    '''
+    Process survey responses to produces separate keywords. tokenize, lowercase, 
+    stem.
+    '''
+    tokens = tokenize(word)
+    pattern = '[' + re.escape(string.punctuation) + '\s+' + ']'
+    out = []
+    for i,w in enumerate(tokens):
+        if re.match(pattern, w.orth_) is not None or w.is_stop:
+            continue
+        out.append(w.orth_.lower())
+    return out
 
 
 if __name__ == "__main__":
@@ -239,8 +241,10 @@ if __name__ == "__main__":
                 except IndexError:
                     pass
     
-    clean_words = [clean(w, parser.tokenize) for w in words 
-                   if clean(w, parser.tokenize) is not None]
+    clean_words = []
+    for w in words:
+        clean_words.extend(clean(w, parser.tokenize))
+
     survey_keywords = {}
     for w in clean_words:
         survey_keywords[w] = survey_keywords.get(w, 0) + 1
