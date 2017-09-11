@@ -9,6 +9,7 @@ import Stemmer
 import pickle
 import re
 import datetime
+import glob
 
 from gensim.corpora import Dictionary
 from gensim import matutils
@@ -209,7 +210,32 @@ if __name__ == "__main__":
                        .fillna(0))
     gt_timeline = np.array(tl['count']).reshape(1, -1)
 
+    # Crowdflower survey
+    reports = glob.glob('../data/cf_report*')
+    words = []
+    for r in reports:
+        with open(r, 'r') as infile:
+            for line in infile:
+                try:
+                    w = line.strip('"\n').split(',"')[1]
+                    ws = w.split(',')
+                    print(ws)
+                    words.extend(ws)
+                except IndexError:
+                    pass
+    
+    clean_words = [clean(w, parser) for w in words if clean(w, parser) is not None]
+    survey_keywords = {}
+    for w in clean_words:
+        survey_keywords[w] = survey_keywords.get(w, 0) + 1
+    
+    kwords = pd.DataFrame([[k,survey_keywords[k]] for k in survey_keywords],
+                          columns=['word', 'count'])
+    kwords['weight'] = kwords['count'] / kwords['count'].sum()
 
+
+    # Serialize everyting
+    pickle.dump(kwords, open('../data/dtms/kwords.p', 'wb'))
     pickle.dump(dtm_normalized, open('../data/dtms/dtm_normalized.p', 'wb'))
     pickle.dump(norm_terms, open('../data/dtms/norm_terms.p', 'wb'))
     pickle.dump(dtm_non_normalized, 
