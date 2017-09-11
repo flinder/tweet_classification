@@ -87,7 +87,6 @@ class TextProcessor(object):
     
         doc_stream = self.document_stream(documents, normalize, word_type)
         vocab = Dictionary(doc_stream)
-        vocab_terms = [x[1] for x in vocab.items()]
 
         if normalize:
             vocab.filter_extremes(no_below=5, no_above=0.2)
@@ -95,11 +94,12 @@ class TextProcessor(object):
         doc_stream = self.document_stream(documents, normalize, word_type)
     
         corpus = [vocab.doc2bow(tokens) for tokens in doc_stream]
-        
+        vocab_terms = [x[1] for x in vocab.items()]
+
         if not sparse:
             dtm = matutils.corpus2dense(corpus, num_terms=len(vocab),
                                         num_docs=len(corpus)).transpose()
-            dtm = pd.DataFrame(dtm.transpose(),
+            dtm = pd.DataFrame(dtm,
                                columns=vocab_terms)
             return dtm
         else:
@@ -217,3 +217,7 @@ if __name__ == "__main__":
     pickle.dump(non_norm_terms, open('../data/dtms/non_norm_terms.p', 'wb'))
     pickle.dump(dtm_hashtags, open('../data/dtms/dtm_hashtags.p', 'wb'))
     pickle.dump(dtm_users, open('../data/dtms/dtm_users.p', 'wb'))
+    pickle.dump(df, open('../data/dtms/df.p', 'wb'))
+    ground_truth = {'timeline': gt_timeline, 'hashtags': gt_hashtags, 
+                    'users': gt_users}
+    pickle.dump(ground_truth, open('../data/dtms/ground_truth.p', 'wb'))
