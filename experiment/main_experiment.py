@@ -10,6 +10,7 @@ import numpy as np
 import time
 import string
 import datetime
+import itertools
 
 from scipy.special import gammaln as G
 from sklearn.linear_model import SGDClassifier
@@ -51,7 +52,7 @@ class SearchEngine(object):
         self.clfs = {'active': SGDClassifier(loss='log'), 
                      'random': SGDClassifier(loss='log')}
         self.n_annotate = n_annotate
-        self.y = y
+        self.y = pd.Series(y, index=self.data.index)
         self.pos_index = set(self.y.index[self.y == 1])
         custom_sw = ['rt']
         sw = (get_stop_words('de') + list(string.punctuation) + [' '] + [''] 
@@ -66,13 +67,6 @@ class SearchEngine(object):
         valid_query = [t for t in query_terms if t in self.valid_terms]
         selected = self.data[valid_query].sum(axis=1) != 0
         return self.data.loc[selected].index
-
-    def expand_query(self):
-        '''
-        Given a list of indices of selected documents, expand the query using
-        provided method
-        '''
-        pass
 
     def random_annotate_docs(self, method, selection):
         '''
@@ -90,12 +84,14 @@ class SearchEngine(object):
         '''
         Annotate data that clfs['active'] is most uncertain about
         '''
-        available = set(selection).difference(self.annotated['active'])
+        available = list(set(selection).difference(self.annotated['active']))
         if len(available) < self.n_annotate:
             return []
-        X = self.clf_data.iloc[selection]
-        pps = self.clfs['active'].predict_proba(X)[:, 1]
-        return np.argsort((0.5 - pps)**2)[:self.n_annotate]
+        X = self.clf_data.iloc[available]
+        pps = self.clfs['active'].predict_proba(X)[:, 1]        
+        inv_priority = pd.Series((0.5-pps)**2, index=available)
+        
+        return inv_priority.sort_values(ascending=True).index[:self.n_annotate]
 
     def fit(self, method):
         '''
@@ -320,6 +316,113 @@ def process_iteration(r):
     return {'stats': stats, 
             'query_term_frequencies': query_term_frequencies}
 
+def replicate(replication):
+    '''
+    One replication of the main experiment. Wrapped in a function for
+    paralleliztion purposes. A number of objects have to exist in the main
+    namespace, see below
+
+    replicatoin: int, Replication number
+    '''
+
+    # Set up data structures for this replication
+    terms = copy.copy(kwords)
+    baseline_query = []
+    expansion_query = []
+
+    trained_active = False     
+    trained_random = False
+    engine.reset()
+    
+    replication_results = []
+
+    for iteration in range(0, N_ITERATIONS):
+        
+        if iteration == 0:
+            print(f'Replication {replication}') 
+
+        # Container for selections
+        res = {'replication': replication, 'iteration': iteration}
+
+        # --------------------------------------------------------------
+        # Keyword Baseline
+        # --------------------------------------------------------------
+
+        ## Draw Keywords
+        new_word, terms = draw_keywords(1, terms) 
+        baseline_query.extend(new_word)
+
+        ## Query Data
+        res['baseline'] = {'selection': engine.query(baseline_query),
+                           'query': copy.copy(baseline_query)}
+       
+        # --------------------------------------------------------------
+        # Expansion and 2 step methods
+        # --------------------------------------------------------------
+
+        # Expand Query
+        # --------------------------------------------------------------
+        if trained_active:
+            expansion = engine.expand_query(expansion_selection, 
+                                            EXPANSION_SCORE,
+                                            EXPANSION_METHOD, 
+                                            expansion_query)
+            expansion_query.append(expansion)
+        else:
+            expansion_query.extend(new_word)
+
+        expansion_selection = engine.query(expansion_query)
+        res['expansion'] = {'selection': expansion_selection,
+                            'query': copy.copy(expansion_query)}
+
+
+        # Annotate data
+        # --------------------------------------------------------------
+        ## For random classifier
+        random_to_annotate = engine.random_annotate_docs(
+                'random', expansion_selection)
+        engine.annotated['random'].update(random_to_annotate)
+
+        ## For active learner
+        if trained_active:
+            active_to_annotate = engine.active_annotate_docs(
+                    expansion_selection)
+        else:
+            active_to_annotate = engine.random_annotate_docs(
+                    'active', expansion_selection)
+        engine.annotated['active'].update(active_to_annotate)
+
+
+        # Train classifiers 
+        # --------------------------------------------------------------
+        trained_random = engine.fit('random')
+        trained_active = engine.fit('active')
+
+
+        # Filter data
+        # --------------------------------------------------------------
+        ## with active classifier
+        if trained_active:
+            selection_active = engine.filter_query(expansion_selection,
+                                                   'active')
+        else:
+            selection_active = expansion_selection
+
+        ## with random classifier
+        if trained_random:
+            selection_random = engine.filter_query(expansion_selection,
+                                                   'random')
+        else:
+            selection_random = expansion_selection
+        
+        res['active'] = {'selection': selection_active}
+        res['random'] = {'selection': selection_random}
+
+        replication_results.append(res)
+
+    return replication_results
+
+
 if __name__ == "__main__":
     '''
     This script runs the main experiment
@@ -329,16 +432,15 @@ if __name__ == "__main__":
     # Settings
     # =========================================================================
     DATA_DIR = '../data/dtms'
-    N_REPLICATIONS = 200
+    N_REPLICATIONS = 100
     N_ITERATIONS = 100
+    N_CORES = 10
     N_ANNOTATE_PER_ITERATION = 5
-    EXPANSION_SCORE = 'monroe'
+    EXPANSION_SCORE = 'lasso'
     EXPANSION_METHOD = 'automatic'
     STORE_FILE_NAME = f'selections_{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
     OUTPUT_FILE_NAME = (f'../data/results/experiment_results_{EXPANSION_SCORE}_'
                         f'{EXPANSION_METHOD}.csv')
-
-        
 
     # =========================================================================
     # Data Import 
@@ -360,108 +462,11 @@ if __name__ == "__main__":
     # Set up data structures for the experiment
     engine = SearchEngine(dtm_non_normalized, dtm_normalized,
                           N_ANNOTATE_PER_ITERATION, df.annotation)
-    
+    process_pool = Pool(N_CORES)
+
     if not os.path.exists(STORE_FILE_NAME):
-        results = [] 
-        for replication in range(0, N_REPLICATIONS):
-            start = time.time()
-
-            # Set up data structures for this replication
-            terms = copy.copy(kwords)
-            baseline_query = []
-            expansion_query = []
-
-            trained_active = False     
-            trained_random = False
-            engine.reset()
-
-            for iteration in range(0, N_ITERATIONS):
-        
-                print(f'Replication {replication}, iteration {iteration}') 
-
-                # Container for selections
-                res = {'replication': replication, 'iteration': iteration}
-
-                # --------------------------------------------------------------
-                # Keyword Baseline
-                # --------------------------------------------------------------
-
-                ## Draw Keywords
-                new_word, terms = draw_keywords(1, terms) 
-                baseline_query.extend(new_word)
-
-                ## Query Data
-                res['baseline'] = {'selection': engine.query(baseline_query),
-                                   'query': copy.copy(baseline_query)}
-               
-                # --------------------------------------------------------------
-                # Expansion and 2 step methods
-                # --------------------------------------------------------------
-
-                # Expand Query
-                # --------------------------------------------------------------
-                if trained_active:
-                    expansion = engine.expand_query(expansion_selection, 
-                                                    EXPANSION_SCORE,
-                                                    EXPANSION_METHOD, 
-                                                    expansion_query)
-                    expansion_query.append(expansion)
-                else:
-                    expansion_query.extend(new_word)
-
-                expansion_selection = engine.query(expansion_query)
-                res['expansion'] = {'selection': expansion_selection,
-                                    'query': copy.copy(expansion_query)}
-
-
-                # Annotate data
-                # --------------------------------------------------------------
-                ## For random classifier
-                random_to_annotate = engine.random_annotate_docs(
-                        'random', expansion_selection)
-                engine.annotated['random'].update(random_to_annotate)
-
-                ## For active learner
-                if trained_active:
-                    active_to_annotate = engine.active_annotate_docs(
-                            expansion_selection)
-                else:
-                    active_to_annotate = engine.random_annotate_docs(
-                            'active', expansion_selection)
-                engine.annotated['active'].update(active_to_annotate)
-
-
-                # Train classifiers 
-                # --------------------------------------------------------------
-                trained_random = engine.fit('random')
-                trained_active = engine.fit('active')
-
-
-                # Filter data
-                # --------------------------------------------------------------
-                ## with active classifier
-                if trained_active:
-                    selection_active = engine.filter_query(expansion_selection,
-                                                           'active')
-                else:
-                    selection_active = expansion_selection
-
-                ## with random classifier
-                if trained_random:
-                    selection_random = engine.filter_query(expansion_selection,
-                                                           'random')
-                else:
-                    selection_random = expansion_selection
-                
-                res['active'] = {'selection': selection_active}
-                res['random'] = {'selection': selection_random}
-
-                results.append(res)
-                del res
-
-            print(time.time() - start)
-            del start
-
+        results = process_pool.map(replicate, list(range(0, N_REPLICATIONS)))
+        results = list(itertools.chain.from_iterable(results))
         pickle.dump(results, open(STORE_FILE_NAME, 'wb'))            
     else:
         results = pickle.load(open(STORE_FILE_NAME, 'rb'))
@@ -470,9 +475,7 @@ if __name__ == "__main__":
     # =========================================================================
     # Process the results
     # =========================================================================
-
-    pool = Pool(5)
-    processed = pool.map(process_iteration, results)
+    processed = process_pool.map(process_iteration, results)
 
     stats = {'replication': [], 'iteration': [], 'method': [], 'measure': [],
              'value': []}
