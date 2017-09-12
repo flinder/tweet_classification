@@ -11,6 +11,7 @@ import time
 import string
 import datetime
 import itertools
+import sys
 
 from scipy.special import gammaln as G
 from sklearn.linear_model import SGDClassifier
@@ -436,7 +437,7 @@ if __name__ == "__main__":
     N_ITERATIONS = 100
     N_CORES = 10
     N_ANNOTATE_PER_ITERATION = 5
-    EXPANSION_SCORE = 'lasso'
+    EXPANSION_SCORE = sys.argv[1]
     EXPANSION_METHOD = 'automatic'
     STORE_FILE_NAME = f'selections_{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
     OUTPUT_FILE_NAME = (f'../data/results/experiment_results_{EXPANSION_SCORE}_'
