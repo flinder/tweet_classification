@@ -435,7 +435,7 @@ if __name__ == "__main__":
     DATA_DIR = '../data/dtms'
     N_REPLICATIONS = 100
     N_ITERATIONS = 100
-    N_CORES = 10
+    N_CORES = 12
     N_ANNOTATE_PER_ITERATION = 5
     EXPANSION_SCORE = sys.argv[1]
     EXPANSION_METHOD = 'automatic'
@@ -470,6 +470,7 @@ if __name__ == "__main__":
         results = list(itertools.chain.from_iterable(results))
         pickle.dump(results, open(STORE_FILE_NAME, 'wb'))            
     else:
+        print('Skipping experiment and loading cached results')
         results = pickle.load(open(STORE_FILE_NAME, 'rb'))
 
 
@@ -493,6 +494,7 @@ if __name__ == "__main__":
 
     output = pd.DataFrame(stats) 
     output.to_csv(OUTPUT_FILE_NAME, index=False)
-               
+    pickle.dump(query_term_frequencies,
+                open('../data/results/query_term_frequencies.p', 'wb'))
 
 
