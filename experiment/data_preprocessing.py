@@ -114,6 +114,21 @@ class TextProcessor(object):
             return dtm, vocab_terms
             
 
+def get_full_data():
+    '''
+    Get the full text dataset from 2015
+    '''
+    _, engine = make_session()
+
+    query = ("SELECT id,text,created_at "
+             "FROM tweets "
+             "WHERE created_at BETWEEN '2015/01/01' AND '2016/01/01' "
+             "    AND lang = 'de' "
+             "    AND data_group = 'de_panel' ")
+
+    df = pd.read_sql(sql=query, con=engine)
+
+    return df
 
 
 def get_data():
@@ -200,6 +215,12 @@ if __name__ == "__main__":
    
     parser = TextProcessor('de')
     df = get_data()
+    df_full = get_full_data()
+    df_full['created_at'] = pd.to_datetime(df_full['created_at'], utc=True)
+
+    dtm_non_normalized_full, full_terms = parser.make_dtm(
+            df_full.text, normalize=False, sparse=True)
+
     dtm_normalized, norm_terms = parser.make_dtm(df.text, normalize=True, 
                                                  sparse=True)
     dtm_non_normalized, non_norm_terms = parser.make_dtm(df.text, 
@@ -209,7 +230,7 @@ if __name__ == "__main__":
     dtm_users = parser.make_dtm(df.text, normalize=False, word_type='user')
 
 
-    # ground truth distributions for users and hastags
+    ## ground truth distributions for users and hastags
     gt_hashtags = dtm_hashtags[df['annotation'] == 1].sum(axis=0)
     gt_hashtags = gt_hashtags.values.reshape(1, -1)
     gt_users = dtm_users[df['annotation'] == 1].sum(axis=0)
@@ -255,7 +276,12 @@ if __name__ == "__main__":
 
 
     # Serialize everyting
+    pickle.dump(df_full[['id', 'created_at']], 
+                open('../data/dtms/df_full.p', 'wb'))
     pickle.dump(kwords, open('../data/dtms/kwords.p', 'wb'))
+    pickle.dump(dtm_non_normalized_full, 
+                open('../data/dtms/dtm_non_normalized_full.p', 'wb'))
+    pickle.dump(full_terms, open('../data/dtms/full_terms.p', 'wb'))
     pickle.dump(dtm_normalized, open('../data/dtms/dtm_normalized.p', 'wb'))
     pickle.dump(norm_terms, open('../data/dtms/norm_terms.p', 'wb'))
     pickle.dump(dtm_non_normalized, 
