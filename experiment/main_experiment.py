@@ -124,7 +124,7 @@ class SearchEngine(object):
         method: str, 'manual' or 'automatic': should terms be selected manually 
            or automatically
         '''
-        X = self.clf_data.iloc[selection]
+        X = self.clf_data.loc[selection]
         classification = self.clfs['active'].predict(X)
 
         if scoring_method == 'king':
@@ -152,24 +152,25 @@ class SearchEngine(object):
         classification: array of classification for each element in query
            selection
         '''
+        
+        n = len(selection)
+        bool_dtm = self.data.loc[selection] != 0
+        idx_1 = selection[classification == 1]
+        idx_0 = selection[classification == 0]
+        n_1 = len(idx_1)
+        n_0 = len(idx_0)
 
-        X = self.clf_data.iloc[selection]
-        classification = self.clfs['active'].predict(X)
-        n_kw_rel = len(selection)
-        clf_rel = classification == 1
-        rel = self.data.iloc[selection].loc[clf_rel]
-        n_match_rel = (rel != 0).sum(axis=0)
-        n_not_match_rel = n_kw_rel - n_match_rel
-        irrel = self.data.iloc[selection].loc[~clf_rel]
-        n_match_irrel = (irrel != 0).sum(axis=0)
-        n_not_match_irrel = n_kw_rel - n_match_irrel
+        # Count how many docs match each word in each condition
+        n_match_1 = bool_dtm.loc[idx_1].sum(axis=0)
+        n_match_0 = bool_dtm.loc[idx_0].sum(axis=0)
 
-        likelihood = ((G(n_match_rel + 1) * 
-                       G(n_match_irrel + 1) * 
-                       G(n_not_match_rel + 1) * 
-                       G(n_not_match_irrel + 1)) /
-                      (G(n_match_rel + n_match_irrel + 2) *
-                       G(n_not_match_rel + n_not_match_irrel + 2)))
+        # Calculate score per word
+        likelihood = ((G(n_match_1 + 1) * 
+                       G(n_match_0 + 1) * 
+                       G(n_1 - n_match_1 + 1) * 
+                       G(n_0 - n_match_0 + 1)) /
+                      (G(n_match_1 + n_match_0 + 2) *
+                       G(n_1 - n_match_1 + n_0 - n_match_0 + 2)))
         
         return likelihood.sort_values(ascending=False)
 
@@ -182,7 +183,7 @@ class SearchEngine(object):
            selection
         '''
         clf_rel = classification == 1
-        X = self.data.iloc[selection].groupby(clf_rel).sum()
+        X = self.data.loc[selection].groupby(clf_rel).sum()
         n = X.sum(axis=1)
         N = n.sum()
         y = X.sum(axis=0)
