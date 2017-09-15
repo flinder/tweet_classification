@@ -3,3 +3,5 @@ __pycache__/
 data/
 *.swp
 *.p
+poster/
+old_data_backup/
