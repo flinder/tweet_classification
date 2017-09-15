@@ -435,7 +435,7 @@ if __name__ == "__main__":
     DATA_DIR = '../data/dtms'
     N_REPLICATIONS = 100
     N_ITERATIONS = 100
-    N_CORES = 12
+    N_CORES = 10
     N_ANNOTATE_PER_ITERATION = 5
     EXPANSION_SCORE = sys.argv[1]
     EXPANSION_METHOD = 'automatic'
