@@ -128,11 +128,11 @@ class SearchEngine(object):
         classification = self.clfs['active'].predict(X)
 
         if scoring_method == 'king':
-            scores = self.king_score(selection, classification)
+            scores = self._king_score(selection, classification)
         elif scoring_method == 'monroe':
-            scores = self.monroe_score(selection, classification)
+            scores = self._monroe_score(selection, classification)
         else:
-            scores = self.lasso_score(selection)
+            scores = self._lasso_score(selection)
 
         if method == 'automatic':
             for word in scores.index:
@@ -143,7 +143,7 @@ class SearchEngine(object):
         else: 
             raise ValueError()
 
-    def king_score(self, selection, classification):
+    def _king_score(self, selection, classification):
         '''
         Assign a score to each word in vocabulary base on the method proposed
         by King et al (2017)
@@ -173,7 +173,7 @@ class SearchEngine(object):
         
         return likelihood.sort_values(ascending=False)
 
-    def monroe_score(self, selection, classification):
+    def _monroe_score(self, selection, classification):
         '''
         Assign a score to each word in vocabulary base on the method proposed
         by King et al (2017)
@@ -196,7 +196,7 @@ class SearchEngine(object):
         return rel_ratios.sort_values(ascending=False) 
        
         
-    def lasso_score(self, selection):
+    def _lasso_score(self, selection):
         '''
         Assign a score to each word in vocabulary based on it's coefficient size
         in a regularized logistic model
@@ -439,7 +439,8 @@ if __name__ == "__main__":
     N_ANNOTATE_PER_ITERATION = 5
     EXPANSION_SCORE = sys.argv[1]
     EXPANSION_METHOD = 'automatic'
-    STORE_FILE_NAME = f'selections_{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
+    STORE_FILE_NAME_SELEC = f'selections_{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
+    STORE_FILE_NAME_QUERY = f'queries{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
     OUTPUT_FILE_NAME = (f'../data/results/experiment_results_{EXPANSION_SCORE}_'
                         f'{EXPANSION_METHOD}.csv')
 
@@ -465,13 +466,13 @@ if __name__ == "__main__":
                           N_ANNOTATE_PER_ITERATION, df.annotation)
     process_pool = Pool(N_CORES)
 
-    if not os.path.exists(STORE_FILE_NAME):
+    if not os.path.exists(STORE_FILE_NAME_SELEC):
         results = process_pool.map(replicate, list(range(0, N_REPLICATIONS)))
         results = list(itertools.chain.from_iterable(results))
-        pickle.dump(results, open(STORE_FILE_NAME, 'wb'))            
+        pickle.dump(results, open(STORE_FILE_NAME_SELEC, 'wb'))            
     else:
         print('Skipping experiment and loading cached results')
-        results = pickle.load(open(STORE_FILE_NAME, 'rb'))
+        results = pickle.load(open(STORE_FILE_NAME_SELEC, 'rb'))
 
 
     # =========================================================================
@@ -495,6 +496,6 @@ if __name__ == "__main__":
     output = pd.DataFrame(stats) 
     output.to_csv(OUTPUT_FILE_NAME, index=False)
     pickle.dump(query_term_frequencies,
-                open('../data/results/query_term_frequencies.p', 'wb'))
+                open(STORE_FILE_NAME_QUERY, 'wb'))
 
 
