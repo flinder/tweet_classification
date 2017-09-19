@@ -18,9 +18,10 @@ from sklearn.linear_model import SGDClassifier
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import (f1_score, precision_score, recall_score,
                              precision_recall_fscore_support)
+from sklearn.model_selection import GridSearchCV
+from sklearn.exceptions import NotFittedError
 from stop_words import get_stop_words
 from multiprocessing import Pool
-
 
 def draw_keywords(n, terms):
     '''
@@ -46,12 +47,18 @@ class SearchEngine(object):
         y: int array, annotation for each document
         '''
         self.data = documents
+        self.data_bool = self.data.astype(bool, copy=False)
         self.clf_data = clf_documents
         self.valid_terms = set(self.data.columns)
         self.all_doc_ids = set(self.data.index)
         self.annotated = {'active': set(), 'random': set()}
-        self.clfs = {'active': SGDClassifier(loss='log'), 
-                     'random': SGDClassifier(loss='log')}
+        self.clf_template = {'active': GridSearchCV(
+                         estimator=SGDClassifier(loss='log', penalty='l1'), 
+                         param_grid={'alpha': np.linspace(0.0001, 0.01, 5)}),
+                     'random': GridSearchCV(
+                         estimator=SGDClassifier(loss='log', penalty='l1'), 
+                         param_grid={'alpha': np.linspace(0.0001, 0.01, 5)})}
+        self.clfs = copy.copy(self.clf_template)
         self.n_annotate = n_annotate
         self.y = pd.Series(y, index=self.data.index)
         self.pos_index = set(self.y.index[self.y == 1])
@@ -100,11 +107,11 @@ class SearchEngine(object):
         training, returns false
         '''
         positives = self.annotated[method].intersection(self.pos_index)
-        if len(positives) < 1 or len(positives) == len(self.annotated[method]):
+        if len(positives) < 3 or len(positives) > (len(self.annotated[method])-3):
             return False
         X = self.clf_data.iloc[list(self.annotated[method])]
         y = self.y.iloc[list(self.annotated[method])]
-        self.clfs[method].fit(X, y)
+        self.clfs[method].fit(X.as_matrix(), y.as_matrix())
         return True
 
     def filter_query(self, selection, method):
@@ -154,15 +161,13 @@ class SearchEngine(object):
         '''
         
         n = len(selection)
-        bool_dtm = self.data.loc[selection] != 0
-        idx_1 = selection[classification == 1]
-        idx_0 = selection[classification == 0]
-        n_1 = len(idx_1)
-        n_0 = len(idx_0)
+        n_1 = sum(classification)
+        n_0 = n - n_1
+        X = self.data_bool.loc[selection].groupby(classification == 1).sum()
 
         # Count how many docs match each word in each condition
-        n_match_1 = bool_dtm.loc[idx_1].sum(axis=0)
-        n_match_0 = bool_dtm.loc[idx_0].sum(axis=0)
+        n_match_1 = X.loc[True] 
+        n_match_0 = X.loc[False] 
 
         # Calculate score per word
         likelihood = ((G(n_match_1 + 1) * 
@@ -183,7 +188,7 @@ class SearchEngine(object):
            selection
         '''
         clf_rel = classification == 1
-        X = self.data.loc[selection].groupby(clf_rel).sum()
+        X = self.data.loc[selection].groupby(classification == 1).sum()
         n = X.sum(axis=1)
         N = n.sum()
         y = X.sum(axis=0)
@@ -206,7 +211,7 @@ class SearchEngine(object):
         '''
         X = self.data.iloc[selection]
         y = self.y.iloc[selection]
-        clf = SGDClassifier().fit(X, y)        
+        clf = SGDClassifier(loss='log').fit(X, y)        
         scores = pd.Series(clf.coef_[0])
         scores.index = self.data.columns
 
@@ -214,8 +219,19 @@ class SearchEngine(object):
 
     def reset(self):
         self.annotated = {'active': set(), 'random': set()}
-        self.clfs = {'active': SGDClassifier(loss='log'), 
-                     'random': SGDClassifier(loss='log')}
+        self.clfs = copy.copy(self.clf_template)
+
+
+    def get_tuning_parameters(self):
+        try:
+            a = self.clfs['active'].best_params_
+        except NotFittedError:
+            a = None
+        try:
+            b = self.clfs['random'].best_params_
+        except NotFittedError:
+            b = None
+        return a, b
 
 def expand_vector(sparse_vector, length):
     out = np.full(length, False, bool)
@@ -311,12 +327,7 @@ def process_iteration(r):
             stats['measure'].append(measure)
             stats['value'].append(method_res[measure])
 
-        if method in ['baseline', 'expansion']:
-            for term in r[method]['query']:
-                d = query_term_frequencies[method]
-                d[term] = d.get(term, 0) + 1
-    return {'stats': stats, 
-            'query_term_frequencies': query_term_frequencies}
+    return stats
 
 def replicate(replication):
     '''
@@ -328,6 +339,7 @@ def replicate(replication):
     '''
 
     # Set up data structures for this replication
+    start = time.time()
     terms = copy.copy(kwords)
     baseline_query = []
     expansion_query = []
@@ -335,6 +347,7 @@ def replicate(replication):
     trained_active = False     
     trained_random = False
     engine.reset()
+    np.random.seed(replication)
     
     replication_results = []
 
@@ -352,6 +365,7 @@ def replicate(replication):
 
         ## Draw Keywords
         new_word, terms = draw_keywords(1, terms) 
+
         baseline_query.extend(new_word)
 
         ## Query Data
@@ -419,9 +433,12 @@ def replicate(replication):
         
         res['active'] = {'selection': selection_active}
         res['random'] = {'selection': selection_random}
+        res['tuning_parameters'] = engine.get_tuning_parameters()
 
         replication_results.append(res)
-
+    
+    t = time.time() - start
+    print(f'Replication {replication} took {t} seconds')
     return replication_results
 
 
@@ -434,16 +451,20 @@ if __name__ == "__main__":
     # Settings
     # =========================================================================
     DATA_DIR = '../data/dtms'
+    N_CORES = 11
     N_REPLICATIONS = 100
     N_ITERATIONS = 100
-    N_CORES = 10
     N_ANNOTATE_PER_ITERATION = 5
     EXPANSION_SCORE = sys.argv[1]
+    #EXPANSION_SCORE = 'lasso'
     EXPANSION_METHOD = 'automatic'
     STORE_FILE_NAME_SELEC = f'selections_{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
-    STORE_FILE_NAME_QUERY = f'queries{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
+    STORE_FILE_NAME_QUERY = f'queries_{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
     OUTPUT_FILE_NAME = (f'../data/results/experiment_results_{EXPANSION_SCORE}_'
                         f'{EXPANSION_METHOD}.csv')
+    TUNING_FILE_NAME = (f'../data/results/tuning_parameters_{EXPANSION_SCORE}_'
+                        f'{EXPANSION_METHOD}.csv')
+
 
     # =========================================================================
     # Data Import 
@@ -483,20 +504,43 @@ if __name__ == "__main__":
 
     stats = {'replication': [], 'iteration': [], 'method': [], 'measure': [],
              'value': []}
-    query_term_frequencies = {'baseline': {}, 'expansion': {}}
 
     for r in processed:
         for key in stats:
-            stats[key].extend(r['stats'][key])
-        for method in ['baseline', 'expansion']:
-            d = query_term_frequencies[method]
-            d_iter = r['query_term_frequencies'][method]
-            for term in d_iter:
-                d[term] = d.get(term, 0) + d_iter[term]
+            stats[key].extend(r[key])
 
     output = pd.DataFrame(stats) 
     output.to_csv(OUTPUT_FILE_NAME, index=False)
-    pickle.dump(query_term_frequencies,
-                open(STORE_FILE_NAME_QUERY, 'wb'))
 
+    # Process the query terms: For each final query (iteration N_ITERATIONS) get
+    # count the terms
+    # Process tunign parameters: For each iteration extract the tunign
+    # parameters if a model has been fit
+   
+    tuning_params = {'replication': [], 'iteration': [], 'method': [], 
+                     'value': []}
+    query_terms = {'baseline': {}, 'expansion': {}}
+
+    for r in results:
+        # Get the tuning parameters
+        tps = r['tuning_parameters']
+        for i,method in enumerate(['active', 'random']):
+            tuning_params['replication'].append(r['replication'])
+            tuning_params['iteration'].append(r['iteration'])
+            tuning_params['method'].append(method)
+            try:
+                tuning_params['value'].append(tps[i]['alpha'])
+            except TypeError:
+                tuning_params['value'].append(np.nan)
+
+        # Process the query
+        if r['iteration'] == N_ITERATIONS - 1:
+            for method in ['baseline', 'expansion']:
+                terms = r[method]['query']
+                for t in terms:
+                    query_terms[method][t] = query_terms[method].get(t, 0) + 1
+        
+    output = pd.DataFrame(tuning_params) 
+    output.to_csv(TUNING_FILE_NAME)
+    pickle.dump(query_terms, open(STORE_FILE_NAME_QUERY, 'wb'))
 
