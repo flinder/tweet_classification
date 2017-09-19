@@ -6,7 +6,6 @@ library(xtable)
 
 source('plot_theme.R')
 
-
 PRES_FIGURES = '../presentation/figures/'
 PAPER_FIGURES = '../paper/figures/'
 RESULT_DIR = '../data/results/'
@@ -122,8 +121,39 @@ ggsave(filename = paste0(PRES_FIGURES, 'evaluation_detail.png'), width = p_width
        height = p_width, dpi = 150)
 
 
+# ==============================================================================
+# Comparing different expansion methods
+# ==============================================================================
 
+df_lasso <- read_csv(paste0(RESULT_DIR, 'experiment_results_lasso_automatic.csv'))
+df_monroe <- read_csv(paste0(RESULT_DIR, 'experiment_results_monroe_automatic.csv'))
+df_king <- read_csv(paste0(RESULT_DIR, 'experiment_results_king_automatic.csv'))
 
+df <- inner_join(df_lasso, df_monroe, by = c('replication', 'iteration', 
+                                             'measure', 'method'),
+                 suffix = c(".lasso", ".monroe")) %>%
+    inner_join(df_king, by = c('replication', 'iteration', 'measure', 'method')) %>%
+    rename(value.king = value) %>%
+    filter(method == "expansion") %>%
+    melt(id = c('replication', 'iteration', 'measure', 'method')) %>%
+    mutate(method = sapply(strsplit(as.character(variable), '\\.'), 
+                           function(x) x[2])) %>%
+    select(-variable) %>%
+    tbl_df()
+    
+ggplot(df, aes(x = iteration, y = value, color = method, linetype = method)) +
+    geom_smooth() +
+    xlab("# Keywords") + ylab("") + 
+    scale_color_manual(values = cbPalette) +
+    guides(color = guide_legend(title = NULL), 
+           linetype = guide_legend(title = NULL)) +
+    facet_wrap(~measure) +
+    plot_theme
+ggsave(filename = paste0(PAPER_FIGURES, 'qe_method_comparison.png'), width = p_width, 
+       height = 2/3 * p_width, dpi = 150)
+ggsave(filename = paste0(PRES_FIGURES, 'qe_method_comparison.png'), width = p_width, 
+       height = 2/3 * p_width, dpi = 150)
+   
 # ==============================================================================
 # Timeline Plots for presentation
 # ==============================================================================
