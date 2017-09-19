@@ -5,6 +5,7 @@ expansion methods
 
 import pickle
 import pandas as pd
+import numpy as np
 
 def make_df(method, queries):
     df = pd.DataFrame(
@@ -13,6 +14,7 @@ def make_df(method, queries):
     )
     df['proportion'] = df['count'] / df['count'].sum()
     del df['count']
+    df['translation'] = np.nan
     return df.sort_values('proportion', ascending=False)
 
 def make_tables(method):

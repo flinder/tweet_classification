@@ -197,6 +197,22 @@ p <- ggplot(timelines, aes(x = date, y = proportion, group = iteration)) +
 ggsave(p, filename = paste0(PRES_FIGURES, 'timeline_full.png'), 
        width = p_width, height = 0.5 * p_width)
 
+
+# Crowdflower word table
+kw <- read_csv('../data/survey_data/crowdflower_keywords.csv')
+kw$translation <- NA
+
+tab <- xtable(kw, digits = 2, 
+              caption = "List of keywords suggested by survey participants.",
+              label = "tab:cf_keywords")
+print(tab, file = '../paper/tables/cf_keywords_long.tex', include.rownames = FALSE)
+
+tab <- xtable(kw[1:20,], digits = 2, 
+              caption = "List of keywords suggested by survey participants.",
+              label = "tab:cf_keywords")
+print(tab, file = '../paper/tables/cf_keywords_short.tex', include.rownames = FALSE)
+
+
 stop()
 # ==============================================================================
 # Miscelaneous Stuff
@@ -215,13 +231,4 @@ stats <-
               max = max(value)) %>%
     as.data.frame() %>%
     print()
-
-# Crowdflower word table
-kw <- read_csv('../data/crowdflower_keywords.csv')
-kw$translation <- NA
-tab <- xtable(kw[1:10, ], digits = 2, 
-              caption = "List of keywords suggested by survey participants.",
-              label = "tab:cf_keywords")
-print(tab, file = '../paper/tables/cf_keywords.tex', include.rownames = FALSE)
-
 
