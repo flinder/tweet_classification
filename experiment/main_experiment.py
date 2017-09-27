@@ -166,8 +166,14 @@ class SearchEngine(object):
         X = self.data_bool.loc[selection].groupby(classification == 1).sum()
 
         # Count how many docs match each word in each condition
-        n_match_1 = X.loc[True] 
-        n_match_0 = X.loc[False] 
+        try:
+            n_match_1 = X.loc[True] 
+        except KeyError:
+            n_match_1 = 0
+        try:
+            n_match_0 = X.loc[False] 
+        except KeyError:
+            n_match_0 = 0
 
         # Calculate score per word
         likelihood = ((G(n_match_1 + 1) * 
