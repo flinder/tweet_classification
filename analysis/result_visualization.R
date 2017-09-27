@@ -21,31 +21,33 @@ benchmark <- data_frame('value' = c(0.81, 0.5),
                          'label' = rep('Classifier Score', 2))
                         
 # Bool vs clf for presentation
-ggplot(filter(df, measure != 'f1')) + 
-    geom_line(aes(x = iteration, y = value, group = replication), 
-               size = 0.5, alpha = 0.3) +
-    geom_smooth(aes(x = iteration, y = value)) +
-    geom_hline(data = filter(benchmark, measure != 'f1'), 
-               aes(yintercept = value), linetype = 2) +
+p <- ggplot(filter(df, measure != 'f1', replication > 1)) + 
     facet_wrap(~measure) +
-    ylim(0,1) + ylab("F1 Score") + xlab("Number of Keywords") +
+    ylim(0,1) + ylab("") + xlab("Number of Keywords") +
+    xlim(0, 100)  +
     plot_theme
-ggsave(filename = paste0(PRES_FIGURES, 'bool_vs_clf.png'), width = p_width, 
+ggsave(p, filename = paste0(PRES_FIGURES, 'bool_vs_clf_1.png'), width = p_width, 
        height = 0.5*p_width, dpi = 301)
 
-# Bool vs clf for presentation
-ggplot(df) + 
-    geom_line(aes(x = iteration, y = value, group = replication), 
-               size = 0.5, alpha = 0.3) +
-    geom_smooth(aes(x = iteration, y = value)) +
-    geom_hline(data=benchmark, aes(yintercept = value), linetype = 2) +
-    facet_wrap(~measure) +
-    ylim(0,1) + ylab("F1 Score") + xlab("Number of Keywords") +
-    #geom_text(aes(x = 10, y = 0.65), label = "Classifier Score", color="grey40") +
-    plot_theme
-ggsave(filename = paste0(PAPER_FIGURES, 'bool_vs_clf.png'), width = p_width, 
+p <- p + 
+    geom_hline(data = filter(benchmark, measure != 'f1'), 
+               aes(yintercept = value), linetype = 2) 
+ggsave(p, filename = paste0(PRES_FIGURES, 'bool_vs_clf_2.png'), width = p_width, 
        height = 0.5*p_width, dpi = 301)
- 
+   
+p <- p + 
+    geom_line(aes(x = iteration, y = value, 
+                  group = interaction(replication, keyword_type), 
+                  color = keyword_type), 
+               size = 0.5, alpha = 0.1) +
+    geom_smooth(aes(x = iteration, y = value, color = keyword_type)) +
+    scale_color_manual(values = cbPalette[-1], 
+                       labels = c("Classifier", "Survey")) +
+    guides(color = FALSE)
+ggsave(p, filename = paste0(PRES_FIGURES, 'bool_vs_clf_3.png'), width = p_width, 
+       height = 0.5*p_width, dpi = 301)
+    
+
 
 # ==============================================================================
 # Main experiment results
@@ -104,7 +106,7 @@ ggsave(filename = paste0(PRES_FIGURES, 'evaluation_similarity.png'), width = p_w
        height = 0.5 * p_width, dpi = 300)
 
 
-ggplot(filter(df, !is.element(measure, c('timeline_similarity'))), 
+ggplot(df, 
               aes(x = iteration, y = value, color = method)) +
     geom_line(aes(group = replication), alpha = 0.2, size = 0.2, position = "jitter") +
     facet_wrap(~ method + measure, nrow = 4) +
