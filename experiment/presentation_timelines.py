@@ -50,7 +50,7 @@ if __name__ == "__main__":
     load = lambda x: pickle.load(open(os.path.join(DATA_DIR, x), 'rb'))
     dtm_full = load('dtms/dtm_non_normalized_full.p')
     terms = load('dtms/full_terms.p')
-    df_full = lad('dtms/df_full.p')
+    df_full = load('dtms/df_full.p')
     kwords = load('dtms/kwords.p')
    
     # Calculate daily counts for full dataset
@@ -86,34 +86,3 @@ if __name__ == "__main__":
     pdat = pd.DataFrame({'proportion': proportion, 'iteration': iteration, 
                      'date': date})
     pdat.to_csv(os.path.join(DATA_DIR, 'results/timelines.csv', index=False)    
-        
-       
-    
-
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
