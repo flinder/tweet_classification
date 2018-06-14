@@ -164,6 +164,7 @@ class SearchEngine(object):
             X = self.clf_data.loc[search_set]
             classification = self.clfs['klr'].predict(X)
             scores = self._king_score(search_set, classification)
+            #scores = self._monroe_score(search_set, classification)
 
         if method == 'automatic':
             for word in scores.index:
@@ -202,13 +203,13 @@ class SearchEngine(object):
             n_match_0 = 0
 
         # Calculate score per word
-        likelihood = ((G(n_match_1 + 1) * 
-                       G(n_match_0 + 1) * 
-                       G(n_1 - n_match_1 + 1) * 
-                       G(n_0 - n_match_0 + 1)) /
-                      (G(n_match_1 + n_match_0 + 2) *
+        likelihood = ((G(n_match_1 + 1) +
+                       G(n_match_0 + 1) +
+                       G(n_1 - n_match_1 + 1) +
+                       G(n_0 - n_match_0 + 1) -
+                       G(n_match_1 + n_match_0 + 2) -
                        G(n_1 - n_match_1 + n_0 - n_match_0 + 2)))
-        
+
         return likelihood.sort_values(ascending=False)
 
     def _monroe_score(self, selection, classification):
