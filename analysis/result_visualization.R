@@ -3,8 +3,7 @@
 library(reshape2)
 library(tidyverse)
 library(xtable)
-
-source('plot_theme.R')
+pe = flindR::plot_elements()
 
 PRES_FIGURES = '../presentation/figures/'
 PAPER_FIGURES = '../paper/figures/'
@@ -14,55 +13,55 @@ RESULT_DIR = '../data/results/'
 # Boolean vs ML
 # ==============================================================================
 
-df <- read_csv(paste0(RESULT_DIR, 'boolean_vs_clf.csv'))
-
-benchmark <- data_frame('value' = c(0.81, 0.5),
-                        'measure' = c('precision', 'recall'),
-                         'label' = rep('Classifier Score', 2))
-                        
-# Bool vs clf for presentation
-p <- ggplot(filter(df, measure != 'f1', replication > 1),
-            aes(x = iteration, y = value)) + 
-    facet_wrap(~measure) +
-    ylim(0,1) + ylab("") + xlab("Number of Keywords") +
-    xlim(0, 100)  +
-    plot_theme
-ggsave(p, filename = paste0(PRES_FIGURES, 'bool_vs_clf_1.png'), width = p_width, 
-       height = 0.5*p_width, dpi = 301)
-
-p <- p + 
-    geom_hline(data = filter(benchmark, measure != 'f1'), 
-               aes(yintercept = value), linetype = 2) 
-ggsave(p, filename = paste0(PRES_FIGURES, 'bool_vs_clf_2.png'), width = p_width, 
-       height = 0.5*p_width, dpi = 301)
-   
-q <- p + 
-    geom_line(aes(group = interaction(replication, keyword_type), color = keyword_type), 
-               size = 0.5, alpha = 0.1) +
-    geom_smooth(aes(color = keyword_type)) +
-    scale_color_manual(values = cbPalette[-1], 
-                       labels = c("Classifier", "Survey")) +
-    guides(color = FALSE)
-ggsave(q, filename = paste0(PRES_FIGURES, 'bool_vs_clf_3.png'), width = p_width, 
-       height = 0.5*p_width, dpi = 301)
-
-# For paper    
-r <- p + 
-    geom_line(aes(group = replication), size = 0.5, alpha = 0.2, 
-              data = filter(df, measure != 'f1', replication > 1,
-                            keyword_type == 'clf_keywords'), color = cbPalette[3]) +
-    geom_smooth(data = filter(df, measure != 'f1', replication > 1,
-                              keyword_type == 'clf_keywords'), color = cbPalette[3])
-    
-ggsave(r, filename = paste0(PAPER_FIGURES, 'bool_vs_clf.png'), width = p_width, 
-       height = 0.5*p_width, dpi = 301)
+#df <- read_csv(paste0(RESULT_DIR, 'boolean_vs_clf.csv'))
+#
+#benchmark <- data_frame('value' = c(0.81, 0.5),
+#                        'measure' = c('precision', 'recall'),
+#                         'label' = rep('Classifier Score', 2))
+#                        
+## Bool vs clf for presentation
+#p <- ggplot(filter(df, measure != 'f1', replication > 1),
+#            aes(x = iteration, y = value)) + 
+#    facet_wrap(~measure) +
+#    ylim(0,1) + ylab("") + xlab("Number of Keywords") +
+#    xlim(0, 100)  +
+#    plot_theme
+#ggsave(p, filename = paste0(PRES_FIGURES, 'bool_vs_clf_1.png'), width = p_width, 
+#       height = 0.5*p_width, dpi = 301)
+#
+#p <- p + 
+#    geom_hline(data = filter(benchmark, measure != 'f1'), 
+#               aes(yintercept = value), linetype = 2) 
+#ggsave(p, filename = paste0(PRES_FIGURES, 'bool_vs_clf_2.png'), width = p_width, 
+#       height = 0.5*p_width, dpi = 301)
+#   
+#q <- p + 
+#    geom_line(aes(group = interaction(replication, keyword_type), color = keyword_type), 
+#               size = 0.5, alpha = 0.1) +
+#    geom_smooth(aes(color = keyword_type)) +
+#    scale_color_manual(values = cbPalette[-1], 
+#                       labels = c("Classifier", "Survey")) +
+#    guides(color = FALSE)
+#ggsave(q, filename = paste0(PRES_FIGURES, 'bool_vs_clf_3.png'), width = p_width, 
+#       height = 0.5*p_width, dpi = 301)
+#
+## For paper    
+#r <- p + 
+#    geom_line(aes(group = replication), size = 0.5, alpha = 0.2, 
+#              data = filter(df, measure != 'f1', replication > 1,
+#                            keyword_type == 'clf_keywords'), color = cbPalette[3]) +
+#    geom_smooth(data = filter(df, measure != 'f1', replication > 1,
+#                              keyword_type == 'clf_keywords'), color = cbPalette[3])
+#    
+#ggsave(r, filename = paste0(PAPER_FIGURES, 'bool_vs_clf.png'), width = p_width, 
+#       height = 0.5*p_width, dpi = 301)
 
 # ==============================================================================
 # Main experiment results
 # ==============================================================================
 
 #df <- read_csv(paste0(RESULT_DIR, 'experiment_results_lasso_automatic.csv'))
-df <- read_csv(paste0(RESULT_DIR, 'test_experiment_results_monroe_automatic.csv'))
+df <- read_csv(paste0(RESULT_DIR, 'v3_aci_experiment_results_lasso_automatic.csv'))
  
 # Relabel
 df$method[df$method == "baseline"] <- "Survey Keywords Only"
@@ -73,7 +72,9 @@ df$method[df$method == "klr"] <- "KLR Expansion Only"
 
 
 # For paper
-ggplot(filter(df, is.element(measure, c('precision', 'recall', 'f1')),
+ggplot(filter(df, is.element(measure, c('f1', 'user_similarity', 
+                                        'hashtag_similarity', 
+                                        'timeline_similarity')),
               method != "Expansion + Random ML"), 
               aes(x = iteration, y = value, color = method, linetype = method)) +
     #geom_point(alpha = 0.1, size = 0.2, position = "jitter") +
@@ -83,59 +84,9 @@ ggplot(filter(df, is.element(measure, c('precision', 'recall', 'f1')),
     guides(color=guide_legend(title=""), linetype=guide_legend(title="")) +
     scale_color_manual(values = cbPalette) +
     ylim(0,1) +
-    plot_theme +
-    theme(legend.position = c(1, 0), 
-          legend.justification = c(1.3, -2)) 
-ggsave(filename = paste0(PAPER_FIGURES, 'evaluation_prec_rec.png'), width = p_width, 
+    pe$theme
+ggsave(filename = paste0(PAPER_FIGURES, 'evaluation.png'), width = p_width, 
        height = p_width, dpi = 300)
-
-# For presentation
-ggplot(filter(df, is.element(measure, c('precision', 'recall')), 
-              method != "Expansion + Random ML"), 
-              aes(x = iteration, y = value, color = method, linetype = method)) +
-    #geom_point(alpha = 0.6, isze = 0.2, position = "jitter") +
-    geom_smooth() +
-    facet_wrap(~ measure) +
-    ylab("") + xlab("# Keywords") +
-    guides(color=guide_legend(title=""), linetype=guide_legend(title="")) +
-    scale_color_manual(values = cbPalette) +
-    ylim(0,1) +
-    plot_theme
-ggsave(filename = paste0(PRES_FIGURES, 'evaluation_prec_rec.png'), width = p_width, 
-       height = 0.5 * p_width, dpi = 300)
-
-# For paper
-ggplot(filter(df, !is.element(measure, c('precision', 'recall', 'f1')),
-              method != "Expansion + Random ML"), 
-              aes(x = iteration, y = value, color = method, linetype = method)) +
-    #geom_point(alpha = 0.6, isze = 0.2, position = "jitter") +
-    geom_smooth() +
-    facet_wrap(~ measure, nrow = 2) +
-    ylab("") + xlab("# Keywords") +
-    guides(color=guide_legend(title=""), linetype=guide_legend(title="")) +
-    scale_color_manual(values = cbPalette) +
-    ylim(0,1) +
-    plot_theme +
-    theme(legend.position = c(1, 0), 
-          legend.justification = c(1.3, -2)) 
-ggsave(filename = paste0(PAPER_FIGURES, 'evaluation_similarity.png'), width = p_width, 
-       height = p_width, dpi = 300)
-
-# For presentation
-ggplot(filter(df, !is.element(measure, c('precision', 'recall', 'f1')),
-              method != "Expansion + Random ML"), 
-              aes(x = iteration, y = value, color = method, linetype = method)) +
-    #geom_point(alpha = 0.6, isze = 0.2, position = "jitter") +
-    geom_smooth() +
-    facet_wrap(~ measure) +
-    ylab("") + xlab("# Keywords") +
-    guides(color=guide_legend(title=""), linetype=guide_legend(title="")) +
-    scale_color_manual(values = cbPalette) +
-    ylim(0,1) +
-    plot_theme
-ggsave(filename = paste0(PRES_FIGURES, 'evaluation_similarity.png'), width = p_width, 
-       height = 0.5 * p_width, dpi = 300)
-
 
 ggplot(filter(df, method != "Expansion + Random ML"), 
               aes(x = iteration, y = value, color = method)) +
