@@ -203,7 +203,7 @@ def replicate(replication):
                 # If the query can't be extended, use a survey keyword
                 expansion_query.extend(new_word)
             t = time.time() - s
-            print(f'active expansion took: {t}s')
+            #print(f'active expansion took: {t}s')
         else:
             expansion_query.extend(new_word)
 
@@ -225,7 +225,7 @@ def replicate(replication):
                 klr_query.extend(new_word)
 
             t = time.time() - s
-            print(f'klr expansion took: {t}s')
+            #print(f'klr expansion took: {t}s')
         else:
             klr_query.extend(new_word)
 
@@ -302,7 +302,7 @@ if __name__ == "__main__":
     EXPANSION_SCORE = 'lasso'
     EXPANSION_METHOD = 'automatic'
     #RUN_ID = 'new_version_'
-    RUN_ID = 'v3'
+    RUN_ID = 'v3_aci'
     STORE_FILE_NAME_SELEC = f'{RUN_ID}_{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
     STORE_FILE_NAME_QUERY = f'{RUN_ID}_queries_{EXPANSION_SCORE}_{EXPANSION_METHOD}.p'
     OUTPUT_FILE_NAME = (f'../data/results/{RUN_ID}_experiment_results_{EXPANSION_SCORE}_'
