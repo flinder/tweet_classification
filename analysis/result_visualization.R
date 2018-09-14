@@ -34,7 +34,8 @@ df$measure = factor(df$measure, levels = c('F-1 Score', 'Precision', 'Recall',
                                            'Timeline Similarity'))
 
 # Main resultsfigure for the paper
-ggplot(df, aes(x = iteration, y = value, color = method, linetype = method)) +
+filter(df, measure %in% c('Precision', 'Recall')) %>%
+ggplot(aes(x = iteration, y = value, color = method, linetype = method)) +
     #geom_point(alpha = 0.1, size = 0.2, position = "jitter") +
     geom_smooth() +
     facet_wrap(~ measure, nrow = 3) +
@@ -43,9 +44,8 @@ ggplot(df, aes(x = iteration, y = value, color = method, linetype = method)) +
     scale_color_manual(values = pe$colors) +
     ylim(0,1) +
     pe$theme
-ggsave(filename = paste0(PAPER_FIGURES, 'evaluation.png'), width = pe$p_width, 
+ggsave(filename = paste0(PAPER_FIGURES, 'evaluation_prec_rec.png'), width = pe$p_width, 
        height = pe$p_width, dpi = 300)
-
 
 # Detailed evaluation (all measures) for appendix
 ggplot(filter(df, method != "Expansion + Random ML"), 
